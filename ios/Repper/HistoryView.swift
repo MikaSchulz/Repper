@@ -1,0 +1,128 @@
+import SwiftUI
+
+/// The last ten sets: what each algorithm counted, what actually happened, and the raw
+/// signal to export. The hand-typed count is the reference the thresholds get tuned to.
+struct HistoryView: View {
+    @ObservedObject var store: SetStore
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if store.records.isEmpty {
+                    ContentUnavailableView("Noch keine Sätze",
+                                           systemImage: "clock.arrow.circlepath",
+                                           description: Text("Aufgezeichnete Sätze landen "
+                                                             + "hier automatisch — auch wenn "
+                                                             + "du danach Reset drückst."))
+                } else {
+                    List {
+                        ForEach(store.records) { record in
+                            SetRow(record: record, store: store)
+                        }
+                        .onDelete { indexSet in
+                            indexSet.map { store.records[$0] }.forEach(store.delete)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Verlauf")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Fertig") { dismiss() }
+                }
+                if !store.records.isEmpty {
+                    ToolbarItem(placement: .topBarLeading) {
+                        ShareLink(items: store.records.flatMap { store.exportURLs(for: $0) }) {
+                            Label("Alle exportieren", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct SetRow: View {
+    let record: SetRecord
+    @ObservedObject var store: SetStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(record.shortDate).font(.subheadline).foregroundStyle(.secondary)
+                if record.isWrist {
+                    Text(record.machine ?? "Handgelenk")
+                        .font(.caption2)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.25))
+                        .clipShape(Capsule())
+                }
+                Spacer()
+                Text(String(format: "%.0f s · %d Samples · %.0f Hz",
+                            record.duration, record.sampleCount, record.measuredRate))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if !record.manualMarks.isEmpty {
+                    Text("\(record.manualMarks.count)× getippt")
+                        .font(.caption2)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.25))
+                        .clipShape(Capsule())
+                }
+            }
+
+            if record.isWrist {
+                Text("Rohaufnahme mit Lage — wird am Rechner ausgewertet, nicht hier gezählt.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            } else {
+                HStack(spacing: 6) {
+                    ForEach(CounterVariant.all) { variant in
+                    VStack(spacing: 1) {
+                        Text(variant.id).font(.caption2).foregroundStyle(.secondary)
+                        Text("\(record.counts[variant.id] ?? 0)")
+                            .font(.headline).monospacedDigit()
+                            .foregroundStyle(color(for: record.counts[variant.id]))
+                    }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                        .background(Color.primary.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+            }
+
+            HStack(spacing: 10) {
+                Text("Tatsächlich")
+                    .font(.footnote)
+
+                // The value has to live outside the Stepper: labelsHidden() would hide it.
+                Text(record.trueReps.map(String.init) ?? "—")
+                    .font(.headline)
+                    .monospacedDigit()
+                    .frame(minWidth: 26, alignment: .leading)
+                    .foregroundStyle(record.trueReps == nil ? .secondary : .primary)
+
+                Stepper("Tatsächlich", value: Binding(
+                    get: { record.trueReps ?? record.primaryCount },
+                    set: { store.setTrueReps($0, for: record) }
+                ), in: 0...100)
+                .labelsHidden()
+
+                Spacer()
+
+                ShareLink(items: store.exportURLs(for: record)) {
+                    Image(systemName: "square.and.arrow.up")
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// Once the true count is known, a variant that matches it is green, one that does not
+    /// is orange — the whole point of running four of them.
+    private func color(for count: Int?) -> Color {
+        guard let truth = record.trueReps, let count else { return .primary }
+        return count == truth ? .green : .orange
+    }
+}

@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+build/
+DerivedData/
+
+# lokaler HTTPS-Server für den Web-Prototyp
+.certs/
+
+# Referenzdaten: 2,4 MB, jederzeit nachladbar
+#   python3 scripts/fetch_reference.py
+data/*.tab
+
+# synthetische Testaufnahmen: deterministisch erzeugt
+#   python3 scripts/make_fixtures.py
+test/fixtures/

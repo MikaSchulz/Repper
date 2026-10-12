@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Repper — Wiederholungszähler</title>
+<style>
+  :root { color-scheme: dark; --bg:#0d0f12; --fg:#e8eaed; --dim:#8b929c; --acc:#4ade80; --warn:#fbbf24; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 -apple-system, system-ui, sans-serif;
+         padding:env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 16px); }
+  h1 { font-size:15px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); margin:16px 0 8px; }
+  #count { font-size:24vw; font-weight:700; line-height:1; text-align:center; font-variant-numeric:tabular-nums; margin:8px 0; }
+  #phase { text-align:center; color:var(--dim); font-size:14px; height:20px; letter-spacing:.1em; text-transform:uppercase; }
+  .row { display:flex; gap:8px; margin:12px 0; }
+  button { flex:1; padding:16px; font-size:17px; font-weight:600; border:0; border-radius:12px;
+           background:#1e2430; color:var(--fg); -webkit-tap-highlight-color:transparent; }
+  button.primary { background:var(--acc); color:#06240f; }
+  button:disabled { opacity:.4; }
+  canvas { width:100%; height:150px; display:block; background:#12161c; border-radius:12px; margin-bottom:8px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; color:var(--dim); font-variant-numeric:tabular-nums; }
+  td { padding:3px 0; } td:last-child { text-align:right; color:var(--fg); }
+  #msg { color:var(--warn); font-size:13px; min-height:18px; }
+</style>
+</head>
+<body>
+
+<div id="count">0</div>
+<div id="phase">—</div>
+
+<div class="row">
+  <button id="start" class="primary">Start</button>
+  <button id="stop" disabled>Stop</button>
+</div>
+<div class="row">
+  <button id="reset">Reset</button>
+  <button id="export" disabled>Export CSV</button>
+</div>
+<div id="msg"></div>
+
+<h1>Beschleunigung |a| − g</h1>
+<canvas id="accPlot" width="700" height="300"></canvas>
+<h1>Geschwindigkeit (integriert)</h1>
+<canvas id="velPlot" width="700" height="300"></canvas>
+
+<h1>Status</h1>
+<table>
+  <tr><td>Abtastrate</td><td id="rate">—</td></tr>
+  <tr><td>Signalquelle</td><td id="source">—</td></tr>
+  <tr><td>Samples</td><td id="samples">0</td></tr>
+  <tr><td>Dauer</td><td id="dur">0.0 s</td></tr>
+  <tr><td>Letzte Wdh.</td><td id="last">—</td></tr>
+  <tr><td>Median con / ecc</td><td id="phases">—</td></tr>
+</table>
+
+<script type="module">
+import { RepCounter, DEFAULTS } from './pipeline.js';
+
+const counter = new RepCounter();
+let running = false, t0 = 0;
+
+const $ = id => document.getElementById(id);
+const msg = s => $('msg').textContent = s;
+
+function plot(canvas, ys, marks, color) {
+  const ctx = canvas.getContext('2d'), W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  if (!ys || !ys.length) return;
+  let lo = Infinity, hi = -Infinity;
+  for (const y of ys) { if (y < lo) lo = y; if (y > hi) hi = y; }
+  const pad = (hi - lo) * 0.15 || 1;
+  lo -= pad; hi += pad;
+  const X = i => i / (ys.length - 1) * W, Y = y => H - (y - lo) / (hi - lo) * H;
+  ctx.strokeStyle = '#2a313d'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, Y(0)); ctx.lineTo(W, Y(0)); ctx.stroke();
+  ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.beginPath();
+  for (let i = 0; i < ys.length; i++) i ? ctx.lineTo(X(i), Y(ys[i])) : ctx.moveTo(X(i), Y(ys[i]));
+  ctx.stroke();
+  if (marks) {
+    ctx.fillStyle = '#f87171';
+    for (const m of marks) { ctx.beginPath(); ctx.arc(X(m), Y(ys[m]), 6, 0, 7); ctx.fill(); }
+  }
+}
+
+function render() {
+  const r = counter.update();
+  $('count').textContent = counter.count;
+  $('samples').textContent = counter.samples.length;
+  const last = counter.samples[counter.samples.length - 1];
+  if (last) $('dur').textContent = last[0].toFixed(1) + ' s';
+  if (counter.count) $('last').textContent = counter.reps[counter.count - 1].toFixed(2) + ' s';
+  if (r) {
+    $('rate').textContent = r.rate.toFixed(0) + ' Hz';
+    // mark counted repetitions, not raw candidates: rejected partials stay unmarked
+    const marks = counter.reps
+      .filter(t => t >= r.tg[0] && t <= r.tg[r.tg.length - 1])
+      .map(t => Math.round((t - r.tg[0]) * 100));
+    plot($('accPlot'), r.acc, null, '#60a5fa');
+    plot($('velPlot'), Array.from(r.vel), marks, '#4ade80');
+    const v = r.vel[r.vel.length - 1];
+    $('phase').textContent = Math.abs(v) < 0.02 ? 'pause' : (v > 0 ? 'konzentrisch' : 'exzentrisch');
+  }
+  if (counter.phases.length) {
+    const med = k => { const s = counter.phases.map(p => p[k]).sort((a, b) => a - b); return s[s.length >> 1]; };
+    $('phases').textContent = `${med(0).toFixed(2)} / ${med(1).toFixed(2)} s`;
+  }
+  if (running) setTimeout(render, 250);
+}
+
+const recorded = [];   // full-resolution copy for export; the counter trims its own window
+
+function onMotion(e) {
+  const g = e.accelerationIncludingGravity;
+  if (!g || g.x === null) return;
+  if (!t0) t0 = e.timeStamp;
+  const t = (e.timeStamp - t0) / 1000;
+  counter.push(t, g.x, g.y, g.z);
+  recorded.push([t, g.x, g.y, g.z]);
+}
+
+async function start() {
+  if (typeof DeviceMotionEvent === 'undefined') { msg('DeviceMotion nicht verfügbar.'); return; }
+  if (typeof DeviceMotionEvent.requestPermission === 'function') {
+    let state;
+    try { state = await DeviceMotionEvent.requestPermission(); }
+    catch (err) { msg('Permission-Fehler: ' + err.message + ' — Seite muss über HTTPS laufen.'); return; }
+    if (state !== 'granted') { msg('Sensorzugriff abgelehnt.'); return; }
+  }
+  try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch (_) {}
+
+  window.addEventListener('devicemotion', onMotion);
+  running = true; t0 = 0;
+  $('start').disabled = true; $('stop').disabled = false; $('export').disabled = true;
+  $('source').textContent = 'accelerationIncludingGravity';
+  msg('');
+  setTimeout(() => {
+    if (!recorded.length) { msg('Keine Events. HTTPS prüfen und Bewegungszugriff erlauben.'); return; }
+    const m = Math.hypot(recorded[0][1], recorded[0][2], recorded[0][3]);
+    if (Math.abs(m - 9.81) > 3) msg(`Warnung: |a| = ${m.toFixed(1)} statt ~9.81 — liefert das Gerät die Gravitation mit?`);
+  }, 1500);
+  render();
+}
+
+function stop() {
+  window.removeEventListener('devicemotion', onMotion);
+  running = false;
+  $('start').disabled = false; $('stop').disabled = true; $('export').disabled = !recorded.length;
+}
+
+function reset() {
+  stop();
+  recorded.length = 0; t0 = 0;
+  counter.samples.length = 0; counter.reps.length = 0; counter.phases.length = 0;
+  $('count').textContent = '0'; $('samples').textContent = '0'; $('dur').textContent = '0.0 s';
+  $('last').textContent = '—'; $('phases').textContent = '—'; $('phase').textContent = '—';
+  for (const c of ['accPlot', 'velPlot']) $(c).getContext('2d').clearRect(0, 0, 700, 300);
+}
+
+function exportCsv() {
+  const rows = ['t,x,y,z', ...recorded.map(s => s.map(v => v.toFixed(5)).join(','))];
+  const blob = new Blob([rows.join('\n')], {type: 'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `repper_${Math.round(recorded[recorded.length - 1][0])}s_${counter.count}reps.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+$('start').onclick = start;
+$('stop').onclick = stop;
+$('reset').onclick = reset;
+$('export').onclick = exportCsv;
+$('rate').textContent = `Ziel ${DEFAULTS.fs} Hz (iOS Safari liefert ~60)`;
+</script>
+</body>
+</html>
