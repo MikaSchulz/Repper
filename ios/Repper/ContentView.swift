@@ -26,16 +26,13 @@ struct ContentView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { session.mark(.top) }
 
-                Color.clear
-                    .frame(height: 74)
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.orange.opacity(session.isRunning ? 0.20 : 0.07))
+                    .frame(height: 190)
+                    .overlay { zoneLabel("UNTEN", "arrow.down.to.line", .orange) }
                     .contentShape(Rectangle())
                     .onTapGesture { session.mark(.bottom) }
-                    .overlay {
-                        Text("unten tippen")
-                            .font(.caption2)
-                            .foregroundStyle(session.isRunning ? Color.orange.opacity(0.7)
-                                                              : Color.secondary.opacity(0.4))
-                    }
+                    .padding(.top, 6)
             }
 
             if let message = session.message {
@@ -91,14 +88,20 @@ struct ContentView: View {
         }
     }
 
-    /// Marks the boundary between the two tap zones while a set is running.
-    @ViewBuilder
+    /// Names the upper tap zone. The boundary between the two has to be readable at a
+    /// glance mid-set, without looking properly.
     private var zoneHint: some View {
-        if session.isRunning {
-            Rectangle()
-                .fill(Color.orange.opacity(0.25))
-                .frame(height: 1)
+        zoneLabel("OBEN", "arrow.up.to.line", .blue)
+            .padding(.bottom, 6)
+    }
+
+    private func zoneLabel(_ title: String, _ symbol: String, _ tint: Color) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+            Text(title).tracking(3)
         }
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(session.isRunning ? tint : Color.secondary.opacity(0.45))
     }
 
     /// Shows how many taps went in, and takes the last one back after a mis-tap.
