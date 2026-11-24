@@ -198,59 +198,6 @@ def _zero_crossings(v: np.ndarray):
     return np.flatnonzero(np.diff(s) != 0)
 
 
-def lobe_bounds(v: np.ndarray, peak: int) -> tuple[int, int]:
-    """Zero crossings bracketing the positive lobe that contains `peak`."""
-    a = peak
-    while a > 0 and v[a] > 0:
-        a -= 1
-    b = peak
-    while b < len(v) - 1 and v[b] > 0:
-        b += 1
-    return a, b
-
-
-def lobe_displacement(v: np.ndarray, peak: int, fs: float) -> float:
-    """Distance the stack travelled during the concentric phase of one peak.
-
-    The area under the positive velocity lobe around `peak`. This is what separates a
-    full repetition from one that was only started: a short jerk reaches nearly the same
-    peak velocity as a full repetition, but covers much less distance.
-    """
-    a, b = lobe_bounds(v, peak)
-    return float(np.trapezoid(v[a:b + 1], dx=1.0 / fs)) if b > a else 0.0
-
-
-def classify_by_travel(travels: np.ndarray, min_frac: float, iterations: int = 4) -> np.ndarray:
-    """Which candidates are full repetitions, judged against the set's own range of motion.
-
-    Every exercise has its own stroke, so the reference has to come from the set itself.
-    It is found by iteration: start from the median of all candidates, keep those within
-    `min_frac` of it, recompute the median from those, repeat. Two or three real
-    repetitions are enough to pin it down, after which the small movements — lifting the
-    stack into the starting position, or a last repetition that only makes it half way —
-    fall out on their own.
-
-    The iteration is what makes this work as a *re*-classification: candidates accepted
-    earlier are re-judged whenever the reference moves, which is why the counter is
-    allowed to correct itself.
-    """
-    if len(travels) == 0:
-        return np.zeros(0, dtype=bool)
-    accepted = np.ones(len(travels), dtype=bool)
-    for _ in range(iterations):
-        reference = float(np.median(travels[accepted])) if accepted.any() \
-            else float(np.median(travels))
-        if reference <= 0:
-            return np.ones(len(travels), dtype=bool)
-        updated = travels >= min_frac * reference
-        if not updated.any():
-            return accepted
-        if np.array_equal(updated, accepted):
-            break
-        accepted = updated
-    return accepted
-
-
 @dataclass
 class RepDetection:
     fs: float
@@ -300,9 +247,6 @@ def detect_reps(
     baseline_s: float | None = None,
     detrend_order: int = 3,
     min_snr: float = 0.5,
-    min_activity: float = 0.12,
-    min_rom_frac: float = 0.65,
-    rom_max_cadence_s: float = 5.0,
     gravity_removed: bool = False,
 ) -> RepDetection:
     """Full pipeline: raw tri-axial acceleration -> repetition count and phases.
@@ -319,35 +263,6 @@ def detect_reps(
     prominence_frac : peak prominence threshold as a fraction of the 90th
         percentile of |velocity|. Scale-free, so it survives different machines
         and loads without recalibration.
-    min_rom_frac : range-of-motion gate. A candidate is only counted if its concentric
-        displacement — the area under its velocity lobe, i.e. how far the stack actually
-        travelled — reaches this fraction of the running median of the repetitions
-        already accepted. Rejects partial repetitions (lifting the stack part of the way
-        and setting it back down) and bounces at the top. Peak velocity would not work
-        here: a short jerk reaches nearly the same speed as a full repetition.
-
-        0.65 comes from a sweep over synthetic sets containing a setup lift, mid-set
-        partials and a fading last repetition: no genuine repetition out of 810 was lost,
-        and 4 of 729 fake ones slipped through. It can sit this high because the reference
-        is re-derived from the whole set rather than from a running median of the first
-        few. Set to 0 to disable the gate.
-    rom_max_cadence_s : the gate is skipped for sets slower than this many seconds per
-        repetition. There the polynomial detrend distorts lobe areas enough that the
-        displacement of a genuine repetition scatters by ±40 %, so gating would throw
-        away real repetitions — the worse error of the two.
-    min_activity : local idle guard. How much movement there is around a candidate,
-        measured against the busiest part of the same window. A window-wide check cannot
-        tell that *right now* nothing is moving while it still holds the set that just
-        ended — and a peak the detrend invents in the standing still afterwards would be
-        counted, spoiling a finished set. Relative to the window's own level, so it holds
-        at any tempo: a slow repetition is weak in absolute terms but not weak next to the
-        rest of its own set.
-    min_snr : idle guard. The prominence threshold is relative to the signal's own
-        amplitude, so a recording of a phone lying still would have its sensor
-        noise rescaled into "repetitions". Movement energy sits below ~3 Hz and
-        noise does not, so the ratio of the smoothed component to the residual
-        separates them regardless of tempo or load. Below this ratio the
-        recording is treated as motionless.
     gravity_removed : set True only if you must feed `userAcceleration`-style
         data. The axis with the largest excursion is then used instead of the
         vector magnitude, because the magnitude of a gravity-free vector has no
@@ -374,10 +289,6 @@ def detect_reps(
     resid = accel - band
     snr = float(band.std() / resid.std()) if resid.std() > 0 else np.inf
 
-    activity = moving_average(np.abs(accel), max(1, int(round(1.0 * fs))))
-    activity_scale = float(np.percentile(activity, 90)) or 1e-9
-    local_activity = activity / activity_scale
-
     if snr < min_snr:
         peaks, prom = np.array([], dtype=int), np.array([])
     else:
@@ -387,15 +298,6 @@ def detect_reps(
             min_distance=max(1, int(round(min_rep_s * fs))),
             min_prominence=prominence_frac * scale if scale > 0 else 0.0,
         )
-        if len(peaks):
-            alive = local_activity[peaks] >= min_activity
-            peaks, prom = peaks[alive], prom[alive]
-
-    cadence = float(np.median(np.diff(tt[peaks]))) if len(peaks) > 2 else 0.0
-    if min_rom_frac > 0 and len(peaks) and cadence <= rom_max_cadence_s:
-        travels = np.array([lobe_displacement(v, int(p), fs) for p in peaks])
-        keep = np.flatnonzero(classify_by_travel(travels, min_rom_frac))
-        peaks, prom = peaks[keep], prom[keep]
 
     det = RepDetection(fs=fs, t=tt, accel=accel, velocity=v, peaks=peaks,
                        prominences=prom, snr=snr)

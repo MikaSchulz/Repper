@@ -8,8 +8,8 @@ struct SetRecord: Codable, Identifiable {
     var duration: Double                 // [s]
     var sampleCount: Int
     var measuredRate: Double             // [Hz]
-    var counts: [String: Int]            // variant id -> repetitions
-    var repTimes: [String: [Double]]     // variant id -> peak times [s]
+    var count: Int                       // repetitions counted
+    var repTimes: [Double]               // time of each counted repetition [s]
     var medianCon: Double?
     var medianEcc: Double?
     /// What actually happened, typed in by hand after the set. The reference every
@@ -34,7 +34,7 @@ struct SetRecord: Codable, Identifiable {
     var isWrist: Bool { kind == "wrist" }
 
     init(id: UUID, date: Date, duration: Double, sampleCount: Int, measuredRate: Double,
-         counts: [String: Int], repTimes: [String: [Double]], medianCon: Double?,
+         count: Int, repTimes: [Double], medianCon: Double?,
          medianEcc: Double?, trueReps: Int?, note: String?, rawFile: String,
          kind: String = "stack", machine: String? = nil, manualMarks: [Double] = [],
          manualBottoms: [Double] = []) {
@@ -43,7 +43,7 @@ struct SetRecord: Codable, Identifiable {
         self.duration = duration
         self.sampleCount = sampleCount
         self.measuredRate = measuredRate
-        self.counts = counts
+        self.count = count
         self.repTimes = repTimes
         self.medianCon = medianCon
         self.medianEcc = medianEcc
@@ -69,8 +69,8 @@ struct SetRecord: Codable, Identifiable {
         duration = try c.decodeIfPresent(Double.self, forKey: .duration) ?? 0
         sampleCount = try c.decodeIfPresent(Int.self, forKey: .sampleCount) ?? 0
         measuredRate = try c.decodeIfPresent(Double.self, forKey: .measuredRate) ?? 0
-        counts = try c.decodeIfPresent([String: Int].self, forKey: .counts) ?? [:]
-        repTimes = try c.decodeIfPresent([String: [Double]].self, forKey: .repTimes) ?? [:]
+        count = try c.decodeIfPresent(Int.self, forKey: .count) ?? 0
+        repTimes = try c.decodeIfPresent([Double].self, forKey: .repTimes) ?? []
         medianCon = try c.decodeIfPresent(Double.self, forKey: .medianCon)
         medianEcc = try c.decodeIfPresent(Double.self, forKey: .medianEcc)
         trueReps = try c.decodeIfPresent(Int.self, forKey: .trueReps)
@@ -81,8 +81,6 @@ struct SetRecord: Codable, Identifiable {
         manualMarks = try c.decodeIfPresent([Double].self, forKey: .manualMarks) ?? []
         manualBottoms = try c.decodeIfPresent([Double].self, forKey: .manualBottoms) ?? []
     }
-
-    var primaryCount: Int { counts[CounterVariant.primary.id] ?? 0 }
 
     var shortDate: String {
         let f = DateFormatter()

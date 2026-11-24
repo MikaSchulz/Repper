@@ -5,16 +5,14 @@ import Foundation
 import UIKit
 #endif
 
-/// Owns the accelerometer stream and the counters, and publishes what the UI shows.
+/// Owns the accelerometer stream and the counter, and publishes what the UI shows.
 ///
-/// Every variant in `CounterVariant.all` is fed the same samples, so one recorded set
-/// yields one count per algorithm. The big display shows the primary variant; the others
-/// exist to be compared afterwards against the repetition count typed in by hand.
+/// Tapping the screen during a set records what actually happened, so a recorded set
+/// carries both the detector's answer and the reference to judge it by.
 @MainActor
 final class RepSession: ObservableObject {
 
     @Published private(set) var count = 0
-    @Published private(set) var variantCounts: [String: Int] = [:]
     @Published private(set) var isRunning = false
     @Published private(set) var countdown: Int?               // nil unless the timer runs
     @Published private(set) var sampleCount = 0
@@ -29,12 +27,6 @@ final class RepSession: ObservableObject {
     @Published private(set) var message: String?
     @Published private(set) var watchStatus = "—"
 
-    /// Which variant the big number, the curve and its marks belong to. Switching does
-    /// not re-record anything — every variant has been fed the same samples all along.
-    @Published var selectedVariantID = CounterVariant.primary.id {
-        didSet { refresh() }
-    }
-    @Published private(set) var isReanalysing = false
     /// Taps on the upper half of the screen: the top of a repetition.
     @Published private(set) var manualMarks: [Double] = []
     /// Taps on the lower half: the bottom, where the load is lowest and the next
@@ -52,7 +44,7 @@ final class RepSession: ObservableObject {
     private static let delayKey = "startDelaySeconds"
 
     private let motion = CMMotionManager()
-    private var counters: [String: RepCounter] = [:]
+    private let counter = RepCounter()
     private var recorded: [MotionSample] = []                  // full resolution, for export
     private var t0: Double?
     private var timer: Timer?
@@ -63,7 +55,6 @@ final class RepSession: ObservableObject {
 
     init() {
         startDelay = UserDefaults.standard.integer(forKey: Self.delayKey)
-        makeCounters()
         link.onCommand = { [weak self] cmd in
             guard let self else { return }
             switch cmd {
@@ -89,8 +80,8 @@ final class RepSession: ObservableObject {
             duration: metadata[WristRecordingFile.Key.duration] as? Double ?? 0,
             sampleCount: metadata[WristRecordingFile.Key.sampleCount] as? Int ?? 0,
             measuredRate: 100,
-            counts: [:],
-            repTimes: [:],
+            count: 0,
+            repTimes: [],
             medianCon: nil,
             medianEcc: nil,
             trueReps: metadata[WristRecordingFile.Key.trueReps] as? Int,
@@ -105,52 +96,6 @@ final class RepSession: ObservableObject {
 
     var hasRecording: Bool { !recorded.isEmpty }
 
-    /// The counter the display follows.
-    private var shown: RepCounter { counters[selectedVariantID] ?? counters[CounterVariant.primary.id]! }
-
-    private func makeCounters() {
-        let store = VariantStore.shared
-        counters = Dictionary(uniqueKeysWithValues:
-            CounterVariant.all.map { ($0.id, RepCounter(config: store.config(for: $0.id))) })
-    }
-
-    /// Re-runs one variant over the samples already recorded, at the same cadence as a
-    /// live set, so a parameter change can be judged on the set in front of you instead
-    /// of on the next one.
-    ///
-    /// The replay happens on a second counter and is swapped in only when it is done —
-    /// otherwise the display would show the half-replayed state, and a set still running
-    /// would lose the samples that arrived meanwhile.
-    func reanalyse(variantID: String) {
-        let config = VariantStore.shared.config(for: variantID)
-        guard !recorded.isEmpty else {
-            counters[variantID] = RepCounter(config: config)
-            refresh()
-            return
-        }
-        isReanalysing = true
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let replacement = RepCounter(config: config)
-            let chunk = max(1, Int(config.fs / 4))              // one pass per 0.25 s
-            var consumed = 0
-            while consumed < self.recorded.count {
-                let end = min(consumed + chunk, self.recorded.count)
-                for i in consumed..<end { replacement.push(self.recorded[i]) }
-                replacement.update()
-                consumed = end
-                if consumed % (chunk * 8) == 0 { await Task.yield() }
-            }
-            // samples that arrived while the replay was running
-            if self.recorded.count > consumed {
-                for i in consumed..<self.recorded.count { replacement.push(self.recorded[i]) }
-                replacement.update()
-            }
-            self.counters[variantID] = replacement
-            self.isReanalysing = false
-            self.refresh()
-        }
-    }
 
     /// Re-checks the watch link. The counterpart app may have launched after this one.
     func refreshWatchLink() {
@@ -197,10 +142,10 @@ final class RepSession: ObservableObject {
     var manualMarkIndices: [Int] { indices(of: manualMarks) }
 
     private func indices(of marks: [Double]) -> [Int] {
-        guard let r = counters[selectedVariantID]?.last, let first = r.t.first,
+        guard let r = counter.last, let first = r.t.first,
               let last = r.t.last, !velocity.isEmpty else { return [] }
         let factor = max(1, r.vel.count / 400)
-        let fs = VariantStore.shared.config(for: selectedVariantID).fs
+        let fs = RepConfig.default.fs
         return marks.compactMap { t in
             guard t >= first, t <= last else { return nil }
             return min(velocity.count - 1, Int(((t - first) * fs).rounded()) / factor)
@@ -283,7 +228,6 @@ final class RepSession: ObservableObject {
         manualBottoms.removeAll()
         t0 = nil
         count = 0
-        variantCounts = [:]
         sampleCount = 0
         duration = 0
         measuredRate = 0
@@ -298,11 +242,10 @@ final class RepSession: ObservableObject {
     }
 
     private func clearCounters() {
-        counters.values.forEach { $0.reset() }
+        counter.reset()
         recorded.removeAll()
         t0 = nil
         count = 0
-        variantCounts = [:]
     }
 
     // MARK: - Recording
@@ -320,35 +263,25 @@ final class RepSession: ObservableObject {
     }
 
     private func push(_ sample: MotionSample) {
-        counters.values.forEach { $0.push(sample) }
+        counter.push(sample)
         recorded.append(sample)
     }
 
     private func refresh() {
-        var analysis: Analysis?
-        for (id, counter) in counters {
-            let r = isRunning || demoTask != nil ? counter.update() : counter.last
-            if id == selectedVariantID { analysis = r }
-            variantCounts[id] = counter.count
-        }
-        count = shown.count
+        let analysis = isRunning || demoTask != nil ? counter.update() : counter.last
+        count = counter.count
         sampleCount = recorded.count
         duration = recorded.last?.t ?? 0
 
-        // While nothing is moving the curve would slowly drift on and the set that just
-        // finished would scroll out of view. Freeze the last picture with movement in it.
-        if let r = analysis, !r.tailIdle {
+        if let r = analysis {
             measuredRate = r.rate
             velocity = Self.thin(r.vel, to: 400)
             let factor = max(1, r.vel.count / 400)
-            // Mark the repetitions that were actually counted, not every raw candidate:
-            // rejected partial repetitions must not show up as ticks on the curve.
-            peaks = shown.reps.compactMap { t in
+            peaks = counter.reps.compactMap { t in
                 guard let first = r.t.first, let last = r.t.last, t >= first, t <= last
                 else { return nil }
                 return min(velocity.count - 1,
-                           Int(((t - first) * VariantStore.shared.config(for: selectedVariantID).fs)
-                               .rounded()) / factor)
+                           Int(((t - first) * RepConfig.default.fs).rounded()) / factor)
             }
             if let v = r.vel.last {
                 let quiet = r.quiet || abs(v) < 0.02
@@ -356,7 +289,7 @@ final class RepSession: ObservableObject {
                 phaseLabel = quiet ? "pause" : (v > 0 ? "konzentrisch" : "exzentrisch")
             }
         }
-        if let p = shown.medianPhases {
+        if let p = counter.medianPhases {
             medianCon = p.con
             medianEcc = p.ecc
         }
@@ -388,8 +321,8 @@ final class RepSession: ObservableObject {
             duration: recorded.last?.t ?? 0,
             sampleCount: recorded.count,
             measuredRate: measuredRate,
-            counts: counters.mapValues(\.count),
-            repTimes: counters.mapValues { $0.reps.map { ($0 * 1000).rounded() / 1000 } },
+            count: counter.count,
+            repTimes: counter.reps.map { ($0 * 1000).rounded() / 1000 },
             medianCon: medianCon,
             medianEcc: medianEcc,
             trueReps: manualMarks.isEmpty ? nil : manualMarks.count,
@@ -399,7 +332,7 @@ final class RepSession: ObservableObject {
             manualBottoms: manualBottoms.map { ($0 * 1000).rounded() / 1000 }
         )
         store.add(record, samples: recorded)
-        message = "Satz gespeichert: \(record.primaryCount) Wdh."
+        message = "Satz gespeichert: \(record.count) Wdh."
     }
 
     // MARK: - Demo

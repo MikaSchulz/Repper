@@ -4,7 +4,6 @@ struct ContentView: View {
     @StateObject private var session = RepSession()
     @State private var exportURL: URL?
     @State private var showHistory = false
-    @State private var showSettings = false
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -37,7 +36,6 @@ struct ContentView: View {
                     }
             }
 
-            variantPicker
             if let message = session.message {
                 Text(message)
                     .font(.caption)
@@ -54,9 +52,6 @@ struct ContentView: View {
         .background(Color.black.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showHistory) { HistoryView(store: session.store) }
-        .sheet(isPresented: $showSettings) {
-            VariantSettingsView(variantID: session.selectedVariantID, session: session)
-        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { session.refreshWatchLink() }
         }
@@ -78,8 +73,7 @@ struct ContentView: View {
                     .monospacedDigit()
                     .minimumScaleFactor(0.5)
                     .lineLimit(1)
-                Text(session.isReanalysing ? "RECHNET …"
-                                           : session.phaseLabel.uppercased())
+                Text(session.phaseLabel.uppercased())
                     .font(.caption2).tracking(2).foregroundStyle(.secondary)
             }
         }
@@ -129,50 +123,6 @@ struct ContentView: View {
     }
 
     // MARK: - Variant picker
-
-    /// Tapping a variant switches the number, the curve and its marks to that algorithm.
-    /// Every variant has seen the same samples, so switching is instant and lossless.
-    private var variantPicker: some View {
-        HStack(spacing: 6) {
-            ForEach(CounterVariant.all) { variant in
-                let selected = variant.id == session.selectedVariantID
-                Button {
-                    session.selectedVariantID = variant.id
-                } label: {
-                    VStack(spacing: 1) {
-                        HStack(spacing: 2) {
-                            Text(variant.id)
-                            if VariantStore.shared.isModified(variant.id) {
-                                Image(systemName: "slider.horizontal.3").font(.system(size: 8))
-                            }
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(selected ? Color.green : Color.secondary)
-                        Text("\(session.variantCounts[variant.id] ?? 0)")
-                            .font(.title3.weight(.semibold))
-                            .monospacedDigit()
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-                    .background(selected ? Color.green.opacity(0.20) : Color.white.opacity(0.05))
-                    .overlay(RoundedRectangle(cornerRadius: 8)
-                        .stroke(selected ? Color.green : .clear, lineWidth: 1.5))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.plain)
-            }
-
-            Button { showSettings = true } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.body)
-                    .frame(width: 40)
-                    .padding(.vertical, 12)
-                    .background(Color.white.opacity(0.05))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-            .buttonStyle(.plain)
-        }
-    }
 
     // MARK: - Stats
 

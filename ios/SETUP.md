@@ -125,21 +125,7 @@ aufgezeichnet.
 **Verlauf.** Die letzten zehn Sätze werden automatisch gespeichert — beim Stop und auch
 dann, wenn du versehentlich Reset drückst. Pro Satz: was jede Variante gezählt hat, die
 Rohaufnahme, und ein Feld für die tatsächliche Wiederholungszahl. Trag die ein, dann
-färben sich passende Varianten grün und daneben liegende orange.
-
-**Vier Varianten gleichzeitig.** Unter der Kurve stehen A bis D — vier Parametersätze,
-die denselben Datenstrom parallel auswerten. Tippen schaltet um: die große Zahl, die
-Kurve und die roten Punkte gehören dann zu dieser Variante. Umschalten ist verlustfrei,
-alle vier haben dieselben Samples gesehen. Kostet etwa 7 ms Rechenzeit pro Variante und
-Auswertung, viermal pro Sekunde.
-
-**Parameter live ändern.** Der Regler-Knopf rechts neben den Varianten öffnet die
-Einstellungen der gerade gewählten Variante: Mindestabstand, Peak-Prominenz, Mindest-Hub,
-Bewertungsverzögerung, Kadenzgrenze, Analysefenster, Ruhe-Schwelle, Sichtungen. Sobald du
-den Regler loslässt, läuft der bereits aufgezeichnete Satz komplett neu durch diese
-Variante — du siehst den Effekt also am Satz vor dir, nicht erst beim nächsten. Ein
-Schieberegler-Symbol am Varianten-Knopf zeigt, dass sie von der Voreinstellung abweicht;
-zurücksetzen geht unten in den Einstellungen.
+färbt sich die Zählung grün, wenn sie passt, und orange, wenn nicht.
 
 **Großer Start-Knopf.** Unten über die volle Breite — der einzige Knopf, den du triffst,
 ohne hinzuschauen. Er wird rot mit "Stop", während aufgezeichnet wird, und orange mit

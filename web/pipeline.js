@@ -18,14 +18,7 @@ export const DEFAULTS = {
   confirmLagS: 0.35,  // a peak is only counted once this much newer data exists
   sightings: 2,       // a peak must survive this many consecutive analyses
   minWindowS: 4.0,    // do not judge a window shorter than this
-  minRomFrac: 0.55,   // reject peaks whose stack travel falls below this share of the median
-  romWarmup: 2,       // repetitions accepted before the range-of-motion gate starts
-  romMaxCadenceS: 5.0,// above this cadence the displacement estimate is too noisy to gate on
-  romSettleS: 1.0,    // how far inside the window a lobe must sit before it is measured
-  minPasses: 8,       // passes a candidate must have sat in the window before it is judged
-  minHitRate: 0.4,    // share of those passes it has to be re-detected in to survive
   minSnr: 0.5,        // movement band vs. sensor noise; below this the window is idle
-  minActivity: 0.12,  // local movement vs. the window's own peak level; below this: standing still
 };
 
 export function hampel(x, win) {
@@ -147,57 +140,6 @@ export function findPeaks(x, minDist, minProm) {
   return kept.sort((a, b) => a - b);
 }
 
-/** Zero crossings bracketing the positive velocity lobe that contains `peak`. */
-export function lobeBounds(v, peak) {
-  let a = peak;
-  while (a > 0 && v[a] > 0) a--;
-  let b = peak;
-  while (b < v.length - 1 && v[b] > 0) b++;
-  return [a, b];
-}
-
-/** Distance the stack travelled during one concentric phase: the area under the
- *  positive velocity lobe. This is what separates a full repetition from one that was
- *  only started — a short jerk reaches nearly the same peak velocity but covers far
- *  less ground.
- *
- *  Only meaningful once the lobe sits a little inside the window (see romSettleS):
- *  measured right at the trailing edge, the polynomial detrend shifts the zero
- *  crossings and the same stroke scatters by a factor of three. */
-export function lobeDisplacement(v, peak, fs) {
-  const [a, b] = lobeBounds(v, peak);
-  if (b <= a) return 0;
-  let area = 0;
-  for (let i = a; i < b; i++) area += 0.5 * (v[i] + v[i + 1]) / fs;
-  return area;
-}
-
-/** Which candidates are full repetitions, judged against the set's own range of motion.
- *
- *  Every exercise has a different stroke, so the reference has to come from the set
- *  itself. It is found by iteration: start from the median of all candidates, keep those
- *  within `minFrac` of it, recompute the median from those, repeat. Two or three real
- *  repetitions pin it down, after which the small movements — lifting the stack into the
- *  starting position, a last repetition that only makes it half way — drop out.
- *
- *  Because this re-runs over every candidate on every pass, a repetition counted earlier
- *  can be withdrawn later, once the set has shown what a full repetition looks like.
- */
-export function classifyByTravel(travels, minFrac, iterations = 4) {
-  if (!travels.length) return [];
-  let accepted = travels.map(() => true);
-  for (let k = 0; k < iterations; k++) {
-    const kept = travels.filter((_, i) => accepted[i]);
-    const reference = median(kept.length ? kept : travels);
-    if (!(reference > 0)) return travels.map(() => true);
-    const updated = travels.map(t => t >= minFrac * reference);
-    if (!updated.some(Boolean)) return accepted;
-    if (updated.every((v, i) => v === accepted[i])) break;
-    accepted = updated;
-  }
-  return accepted;
-}
-
 /** One pass over a window of samples: [[t, x, y, z], ...] -> conditioned signals + peaks. */
 export function analyseWindow(samples, opt = {}) {
   const o = {...DEFAULTS, ...opt};
@@ -232,25 +174,9 @@ export function analyseWindow(samples, opt = {}) {
   const snr = std(band) / (std(resid) || 1e-9);
   const quiet = snr < o.minSnr || (tg[tg.length - 1] - tg[0]) < o.minWindowS;
 
-  // How much movement there is *right now*, measured against how much this window sees
-  // at its busiest. The window-wide ratio above cannot answer that: while it still holds
-  // the set that just ended it looks busy, so a peak the detrend invents in the standing
-  // still afterwards would be counted and would spoil the set. Comparing local amplitude
-  // against the window's own amplitude works at any tempo — a slow repetition is weak in
-  // absolute terms but not weak compared to the rest of its own set.
-  const activity = movingAverage(acc.map(Math.abs), Math.round(1.0 * o.fs));
-  const activityScale = percentile(activity, 0.9) || 1e-9;
-  const localActivity = activity.map(a => a / activityScale);
+  const peaks = quiet ? [] : findPeaks(vel, Math.round(o.minRepS * o.fs), o.promFrac * scale);
 
-  const found = quiet ? [] : findPeaks(vel, Math.round(o.minRepS * o.fs), o.promFrac * scale);
-  const peaks = found.filter(p => localActivity[p] >= o.minActivity);
-
-  const tailFrom = Math.max(0, localActivity.length - Math.round(2.0 * o.fs));
-  const tail = localActivity.slice(tailFrom);
-  const tailIdle = tail.length > 0
-    && tail.reduce((a, b) => a + b, 0) / tail.length < o.minActivity;
-
-  return {tg, acc, vel, peaks, rate, snr, quiet, localActivity, tailIdle};
+  return {tg, acc, vel, peaks, rate, snr, quiet};
 }
 
 /** Streaming counter.
@@ -264,11 +190,11 @@ export class RepCounter {
   constructor(opt = {}) {
     this.o = {...DEFAULTS, ...opt};
     this.samples = [];
-    this.candidates = [];       // {t, travel, sightings, passes}
-    this.lastSampleCount = -1;
-    this.reps = [];             // accepted candidate times [s]
-    this.phases = [];           // [con, ecc] per accepted rep, or null
+    this.reps = [];             // confirmed repetition times [s]
+    this.phases = [];           // [con, ecc] per repetition, filled in once it is known
     this.last = null;
+    this.frontier = -Infinity;  // nothing at or before this time can be counted again
+    this.pending = [];          // [time, sightings] awaiting confirmation
   }
 
   push(t, x, y, z) { this.samples.push([t, x, y, z]); }
@@ -277,47 +203,26 @@ export class RepCounter {
 
   reset() {
     this.samples.length = 0;
-    this.candidates = [];
     this.reps = [];
     this.phases = [];
-    this.lastSampleCount = -1;
+    this.pending = [];
+    this.frontier = -Infinity;
     this.last = null;
   }
 
-  /** Median spacing of a list of times, 0 if there are fewer than two. */
-  static medianGap(times) {
-    if (times.length < 2) return 0;
-    const gaps = [];
-    for (let i = 1; i < times.length; i++) gaps.push(times[i] - times[i - 1]);
-    gaps.sort((a, b) => a - b);
-    return gaps[gaps.length >> 1];
-  }
-
-  /** How far a re-detected peak may wander between passes without being taken for a new
-   *  one: half the observed cadence, floored at the minimum repetition distance.
-   *  Measured on the candidates, not on the accepted repetitions — the gate must not
-   *  influence the geometry it is judged with. */
+  /** Half the observed cadence, floored at minRepS: how far a re-detected peak may
+   *  wander between passes without being taken for a second repetition. */
   get mergeTolerance() {
-    const gap = RepCounter.medianGap(this.candidates.map(c => c.t));
-    return gap > 0 ? Math.max(this.o.minRepS, 0.45 * gap) : this.o.minRepS;
+    if (this.reps.length < 2) return this.o.minRepS;
+    const gaps = [];
+    for (let i = 1; i < this.reps.length; i++) gaps.push(this.reps[i] - this.reps[i - 1]);
+    gaps.sort((a, b) => a - b);
+    return Math.max(this.o.minRepS, 0.45 * gaps[gaps.length >> 1]);
   }
 
-  /** Above this cadence the travel estimate scatters too much to judge by. Derived from
-   *  the candidates for the same reason: deriving it from the accepted repetitions would
-   *  be circular — a gate that wrongly rejects would keep itself switched on. */
-  gateActiveFor(times) {
-    if (this.o.minRomFrac <= 0) return false;
-    const gap = RepCounter.medianGap(times);
-    return gap === 0 || gap <= this.o.romMaxCadenceS;
-  }
-
+  /** Re-analyse the trailing window and confirm any new repetitions. */
   update() {
     if (this.samples.length < this.o.fs / 2) return null;
-    // Without new samples there is nothing to re-judge, and running anyway would inflate
-    // every candidate's pass count and skew the hit-rate filter — a counter refreshed
-    // often would then behave differently from the same signal replayed.
-    if (this.samples.length === this.lastSampleCount) return this.last;
-    this.lastSampleCount = this.samples.length;
     const tNow = this.samples[this.samples.length - 1][0];
     const from = tNow - this.o.windowS;
     while (this.samples.length > 4 && this.samples[0][0] < from - 1) this.samples.shift();
@@ -327,53 +232,38 @@ export class RepCounter {
     this.last = r;
     if (!r) return null;
 
-    const tol = this.mergeTolerance;
-    const windowStart = r.tg[0];
-    const seenNow = new Set();
+    // Bootstrap: the cadence is unknown, and a detrend over roughly one repetition can
+    // split that repetition in two. Commit nothing until the window covers at least
+    // three apparent repetition periods.
+    if (this.reps.length === 0) {
+      if (r.peaks.length < 2) return r;
+      const gaps = [];
+      for (let i = 1; i < r.peaks.length; i++) gaps.push((r.peaks[i] - r.peaks[i - 1]) / this.o.fs);
+      gaps.sort((a, b) => a - b);
+      const span = r.tg[r.tg.length - 1] - r.tg[0];
+      if (span < 3 * gaps[gaps.length >> 1]) return r;
+    }
 
+    // A peak has to show up in consecutive analyses before it counts. A single knock
+    // against the stack can look like a repetition in one window; it does not survive
+    // the next one.
+    const tol = this.mergeTolerance;
+    const seen = [];
     for (const p of r.peaks) {
       const tp = r.tg[p];
-      if (tp > tNow - this.o.confirmLagS) continue;        // too fresh to be stable
-      const [la, lb] = lobeBounds(r.vel, p);
-      const settled = (r.tg[r.tg.length - 1] - r.tg[lb]) >= this.o.romSettleS;
-      const complete = lb < r.vel.length - 1 && settled;
-
-      let cand = this.candidates.find(c => Math.abs(c.t - tp) < tol);
-      if (!cand) {
-        cand = {t: tp, travel: null, sightings: 0, passes: 0};
-        this.candidates.push(cand);
+      if (tp > tNow - this.o.confirmLagS) continue;      // too fresh to be stable
+      if (tp <= this.frontier + tol) continue;           // same repetition, shifted
+      const prev = this.pending.find(q => Math.abs(q[0] - tp) < tol);
+      const entry = prev ? [tp, prev[1] + 1] : [tp, 1];
+      seen.push(entry);
+      if (entry[1] >= this.o.sightings) {
+        this.reps.push(tp);
+        this.phases.push(null);     // resolved once the eccentric lobe is complete
+        this.frontier = tp;
       }
-      cand.sightings++;
-      cand.t = tp;
-      if (complete) cand.travel = lobeDisplacement(r.vel, p, this.o.fs);
-      seenNow.add(cand);
     }
+    this.pending = seen.filter(e => e[1] < this.o.sightings);
 
-    // A single missed pass means nothing: peak prominence is relative to the window's own
-    // amplitude and fluctuates as the window slides, and a repetition deleted by mistake
-    // could never come back once the window has moved past it. What separates a real
-    // repetition from an artefact is how *reliably* it is re-detected while it sits in
-    // the window — a real one shows up in nearly every pass, a transient in a few.
-    for (const c of this.candidates) {
-      if (c.t >= windowStart && c.t <= tNow - this.o.confirmLagS) c.passes = (c.passes || 0) + 1;
-    }
-    this.candidates = this.candidates.filter(c =>
-      (c.passes || 0) < this.o.minPasses || c.sightings / c.passes >= this.o.minHitRate);
-
-    this.candidates.sort((a, b) => a.t - b.t);
-    const judged = this.candidates.filter(c => c.sightings >= this.o.sightings
-                                            && c.travel !== null);
-    const accepted = this.gateActiveFor(judged.map(c => c.t))
-      ? classifyByTravel(judged.map(c => c.travel), this.o.minRomFrac)
-      : judged.map(() => true);
-
-    const previous = this.phases;
-    const previousReps = this.reps;
-    this.reps = judged.filter((_, i) => accepted[i]).map(c => c.t);
-    this.phases = this.reps.map(t => {
-      const i = previousReps.findIndex(p => Math.abs(p - t) < 1e-6);
-      return i >= 0 ? previous[i] : null;
-    });
     this.resolvePhases(r);
     return r;
   }

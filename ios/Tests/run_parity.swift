@@ -46,10 +46,16 @@ struct Parity {
             }
             counter.update()
 
-            let ok = counter.count == exp.true_reps && counter.count == exp.python_reps
+            // Measured against the Python run, not against the truth: on the two sets
+            // built from partial repetitions this detector counts the extra movements,
+            // and every implementation has to do so identically.
+            let ok = counter.count == exp.python_reps
             if !ok { failures += 1 }
             var line = "\(ok ? "PASS" : "FAIL")  \(name.padding(toLength: 18, withPad: " ", startingAt: 0))"
             line += "swift=\(counter.count) python=\(exp.python_reps) truth=\(exp.true_reps)"
+            if counter.count != exp.true_reps {
+                line += "  (+\(counter.count - exp.true_reps))"
+            }
             if let p = counter.medianPhases {
                 line += String(format: "  con/ecc median %.2f/%.2fs", p.con, p.ecc)
             }

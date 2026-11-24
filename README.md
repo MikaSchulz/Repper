@@ -9,6 +9,22 @@ für beide Implementierungen, ein HTTPS-Server für den Handy-Prototyp.
 
 Abhängigkeiten: Python 3.10+ mit numpy. Node (nur für den JS-Test). Sonst nichts.
 
+## Branches
+
+`main` enthält **nur das Verfahren aus dem Paper**: Jeder Peak in der Geschwindigkeit ist
+eine Wiederholung, nichts wird abgewogen. Das zählt auch mit, was keine Wiederholung ist
+— das Hochnehmen des Blocks in die Startposition, oder eine Wiederholung, die nur halb
+hochkommt (siehe `TestKnownLimits`). Dafür ist es klein, nachvollziehbar und auf sauberen
+Sätzen zuverlässig.
+
+Alles, was darüber hinausgeht, liegt auf eigenen Branches und wird dort an echten Daten
+geprüft, bevor es hier landet:
+
+| Branch | Inhalt |
+|---|---|
+| `full` | Bewegungsumfang je Satz, Selbstkorrektur, lokale Ruhe-Prüfung, vier Varianten nebeneinander, Live-Parameter, Watch-App mit Aufnahmemodus |
+| `baseline` | wie `full`, zusätzlich ein Schalter zurück auf das reine Paper-Verfahren |
+
 ---
 
 ## Drei Korrekturen zum Handout
@@ -139,42 +155,16 @@ Pipeline: Vektorlänge → Hampel → Zeitstempel bereinigen und äquidistant in
 Gravitationsoffset (Median) → einfach integrieren → Polynom-Detrend → Moving Average →
 Peak-Detection (Mindestabstand + Prominenz) → Phasen über Nulldurchgänge.
 
-Drei Abweichungen vom Paper, alle empirisch begründet:
+Zwei Abweichungen vom Paper, beide empirisch begründet:
 
 - **Gravitationsabzug als konstanter Median**, nicht als gleitende Basislinie. Eine
   gleitende Basislinie ist ein Hochpass; mit 4-s-Fenster kostet sie bei 8-s-Wiederholungen
-  37 % F-Score, weil das Ripple falsche Peaks erzeugt. Die Drift erledigt der
-  Polynomfit in der Geschwindigkeitsdomäne.
-- **Ruhe-Gate, zweistufig**: Die Prominenzschwelle ist relativ zur Signalamplitude, also
-  würde ein still liegendes Handy sein eigenes Rauschen zu "Wiederholungen" hochskalieren.
-  Über das ganze Fenster trennt das Verhältnis von geglätteter Komponente zu Residuum
-  Bewegung von Rauschen (`min_snr`, Default 0,5).
-
-  Das reicht aber nicht, wenn der Satz *gerade* zu Ende ist: Solange das Fenster die
-  letzten Wiederholungen noch enthält, wirkt es bewegt — während der Polynomfit in den
-  ruhigen Teil eine langsame Welle legt, die als Wiederholung durchgeht. Deshalb zusätzlich
-  eine **lokale** Prüfung (`min_activity`, Default 0,12): Bewegungsamplitude an der Stelle
-  des Kandidaten, gemessen am geschäftigsten Teil desselben Fensters. Relativ, also
-  tempounabhängig — eine langsame Wiederholung ist absolut schwach, aber nicht schwach
-  neben dem Rest ihres eigenen Satzes.
-- **Bewegungsumfang je Satz** (`min_rom_frac`, Default 0,65): Jede Übung hat einen
-  anderen Hub, also kommt der Maßstab aus dem Satz selbst. Gemessen wird nicht die
-  Peak-Höhe — ein kurzer Ruck erreicht fast dieselbe Spitzengeschwindigkeit — sondern die
-  **Fläche unter der Geschwindigkeitskurve**, also der zurückgelegte Weg des Blocks.
-
-  Der Referenzwert wird iterativ bestimmt: Median über alle Kandidaten, davon behalten was
-  innerhalb von 65 % liegt, Median neu aus den Behaltenen, wiederholen. Zwei, drei echte
-  Wiederholungen genügen, dann steht der Maßstab.
-
-  Entscheidend ist, dass **jeder Durchlauf den ganzen Satz neu bewertet**. Das Hochnehmen
-  des Blocks am Satzanfang zählt kurz als Wiederholung — bis zwei echte den Maßstab
-  gesetzt haben, dann verschwindet es aus Zahl *und* Kurve. Dasselbe gilt für eine letzte
-  Wiederholung, die nur noch halb hochkommt.
-
-  Kalibrierung an synthetischen Sätzen mit Hochnehmen, Teilwiederholungen und
-  abfallendem Schluss: keine von 810 echten Wiederholungen verloren, 4 von 729 unechten
-  durchgerutscht. Bei Kadenzen über 5 s/Wdh. wird die Bewertung abgeschaltet — dort
-  streut die Wegschätzung um ±40 % und würde echte Wiederholungen kosten.
+  37 % F-Score, weil das Ripple falsche Peaks erzeugt. Die Drift erledigt der Polynomfit
+  in der Geschwindigkeitsdomäne.
+- **Ruhe-Gate**: Die Prominenzschwelle ist relativ zur Signalamplitude, also würde ein
+  still liegendes Handy sein eigenes Rauschen zu "Wiederholungen" hochskalieren. Das
+  Verhältnis von geglätteter Komponente zu Residuum trennt Bewegung von Rauschen
+  unabhängig von Tempo und Last (`min_snr`, Default 0,5).
 
 Der Live-Zähler im Browser hat zusätzlich: 60-s-Analysefenster (kürzere Fenster zerlegen
 langsame Wiederholungen), Frontier-Logik gegen Doppelzählung bei wandernden
@@ -210,25 +200,16 @@ ios/RepperWatch/   Watch-App (Spiegel-Modus und eigenständiges Zählen)
 ios/Tests/         Paritätstest gegen dieselben Fixtures wie Python und JS
 ```
 
-Die iPhone-App zeichnet jeden Satz mit vier parallel laufenden Algorithmus-Varianten auf
-(A Standard, B ohne ROM-Gate, C strengeres ROM, D empfindlichere Peaks). Zwischen ihnen
-lässt sich live umschalten — Zahl, Kurve und Markierungen folgen der Auswahl — und jeder
-Parameter ist zur Laufzeit einstellbar; nach jeder Änderung wird der aufgezeichnete Satz
-sofort neu durchgerechnet. Die letzten zehn
-Sätze landen samt Rohsignal im Verlauf — auch wenn danach Reset gedrückt wird. Dort lässt
-sich die tatsächliche Wiederholungszahl eintragen; Varianten, die daneben liegen, werden
-orange. Export liefert pro Satz die Roh-CSV und ein Summary-JSON.
-
-Während des Satzes markieren Tipps die echten Wiederholungen: obere Bildschirmhälfte für
-den oberen Umkehrpunkt, ein Streifen darunter für den unteren. Beide zusammen klammern
-jede Wiederholung ein, womit neben der Zählung auch die **Phasendauern** eine Referenz
-bekommen. Die Zeitpunkte landen im Export; der Abgleich läuft pro Wiederholung statt über
-Summen, inklusive systematischem Zeitversatz zwischen Tipp und Erkennung.
+Die iPhone-App zeichnet jeden Satz auf und zählt live mit. Während des Satzes markieren
+Tipps die echten Wiederholungen: obere Bildschirmhälfte für den oberen Umkehrpunkt, ein
+Streifen darunter für den unteren. Beide zusammen klammern jede Wiederholung ein, womit
+neben der Zählung auch die Phasendauern eine Referenz bekommen. Die letzten zehn Sätze
+landen samt Rohsignal im Verlauf — auch wenn danach Reset gedrückt wird.
 
 Der Auswerteweg dazu:
 
 ```bash
-python3 scripts/evaluate_exports.py ~/Downloads/repper           # Varianten bewerten
+python3 scripts/evaluate_exports.py ~/Downloads/repper           # Zählung bewerten
 python3 scripts/evaluate_exports.py ~/Downloads/repper --sweep   # Parametersuche
 ```
 

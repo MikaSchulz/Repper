@@ -58,11 +58,6 @@ private struct SetRow: View {
                         .background(Color.blue.opacity(0.25))
                         .clipShape(Capsule())
                 }
-                Spacer()
-                Text(String(format: "%.0f s · %d Samples · %.0f Hz",
-                            record.duration, record.sampleCount, record.measuredRate))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
                 if !record.manualMarks.isEmpty {
                     Text("\(record.manualMarks.count)× getippt")
                         .font(.caption2)
@@ -70,31 +65,28 @@ private struct SetRow: View {
                         .background(Color.blue.opacity(0.25))
                         .clipShape(Capsule())
                 }
+                Spacer()
+                Text(String(format: "%.0f s · %d Samples · %.0f Hz",
+                            record.duration, record.sampleCount, record.measuredRate))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
 
             if record.isWrist {
                 Text("Rohaufnahme mit Lage — wird am Rechner ausgewertet, nicht hier gezählt.")
                     .font(.caption2).foregroundStyle(.secondary)
             } else {
-                HStack(spacing: 6) {
-                    ForEach(CounterVariant.all) { variant in
-                    VStack(spacing: 1) {
-                        Text(variant.id).font(.caption2).foregroundStyle(.secondary)
-                        Text("\(record.counts[variant.id] ?? 0)")
-                            .font(.headline).monospacedDigit()
-                            .foregroundStyle(color(for: record.counts[variant.id]))
-                    }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 4)
-                        .background(Color.primary.opacity(0.06))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                    }
+                HStack(spacing: 8) {
+                    Text("gezählt").font(.footnote).foregroundStyle(.secondary)
+                    Text("\(record.count)")
+                        .font(.title3.weight(.semibold)).monospacedDigit()
+                        .foregroundStyle(colorForCount)
+                    Spacer()
                 }
             }
 
             HStack(spacing: 10) {
-                Text("Tatsächlich")
-                    .font(.footnote)
+                Text("Tatsächlich").font(.footnote)
 
                 // The value has to live outside the Stepper: labelsHidden() would hide it.
                 Text(record.trueReps.map(String.init) ?? "—")
@@ -104,7 +96,7 @@ private struct SetRow: View {
                     .foregroundStyle(record.trueReps == nil ? .secondary : .primary)
 
                 Stepper("Tatsächlich", value: Binding(
-                    get: { record.trueReps ?? record.primaryCount },
+                    get: { record.trueReps ?? record.count },
                     set: { store.setTrueReps($0, for: record) }
                 ), in: 0...100)
                 .labelsHidden()
@@ -119,10 +111,9 @@ private struct SetRow: View {
         .padding(.vertical, 4)
     }
 
-    /// Once the true count is known, a variant that matches it is green, one that does not
-    /// is orange — the whole point of running four of them.
-    private func color(for count: Int?) -> Color {
-        guard let truth = record.trueReps, let count else { return .primary }
-        return count == truth ? .green : .orange
+    /// Green once the count matches what was tapped in, orange when it does not.
+    private var colorForCount: Color {
+        guard let truth = record.trueReps else { return .primary }
+        return record.count == truth ? .green : .orange
     }
 }

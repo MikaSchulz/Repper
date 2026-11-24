@@ -149,28 +149,6 @@ enum Signal {
         return kept.sorted()
     }
 
-    /// Which candidates are full repetitions, judged against the set's own range of
-    /// motion. Every exercise has a different stroke, so the reference comes from the set
-    /// itself: start from the median of all candidates, keep those within `minFrac` of it,
-    /// recompute the median from those, repeat. Two or three real repetitions pin it down,
-    /// after which the small movements — lifting the stack into position, a last
-    /// repetition that only makes it half way — fall out on their own.
-    static func classifyByTravel(_ travels: [Double], minFrac: Double,
-                                 iterations: Int = 4) -> [Bool] {
-        guard !travels.isEmpty else { return [] }
-        var accepted = [Bool](repeating: true, count: travels.count)
-        for _ in 0..<iterations {
-            let kept = zip(travels, accepted).filter { $0.1 }.map { $0.0 }
-            let reference = median(kept.isEmpty ? travels : kept)
-            guard reference > 0 else { return [Bool](repeating: true, count: travels.count) }
-            let updated = travels.map { $0 >= minFrac * reference }
-            if !updated.contains(true) { return accepted }
-            if updated == accepted { break }
-            accepted = updated
-        }
-        return accepted
-    }
-
     static func percentile(_ x: [Double], _ p: Double) -> Double {
         guard !x.isEmpty else { return 0 }
         let s = x.sorted()
