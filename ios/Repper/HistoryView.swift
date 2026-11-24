@@ -59,6 +59,13 @@ private struct SetRow: View {
                         .background(Color.blue.opacity(0.25))
                         .clipShape(Capsule())
                 }
+                if record.isMeasurement {
+                    Text("Messung")
+                        .font(.caption2)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.25))
+                        .clipShape(Capsule())
+                }
                 if !record.manualMarks.isEmpty {
                     Text("\(record.manualMarks.count)× getippt")
                         .font(.caption2)

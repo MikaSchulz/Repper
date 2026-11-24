@@ -10,9 +10,13 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            // The upper half marks the top of a repetition, the lower half the bottom
-            // where the load is lowest and the next one starts. Two taps per repetition
-            // bracket it, which is what makes the phase durations checkable at all.
+            modePicker
+
+            // Measurement mode only: the upper zone marks the top of a repetition, the
+            // lower one the bottom where the load is lowest and the next begins. Two taps
+            // bracket a repetition, which is what makes the count checkable at all.
+            // Training mode drops both -- with the phone on the stack they cannot be
+            // reached anyway, and the plot gets the room.
             VStack(spacing: 0) {
                 VStack(spacing: 10) {
                     counter
@@ -21,18 +25,22 @@ struct ContentView: View {
                                  manualBottoms: session.manualBottomIndices)
                         .frame(maxHeight: .infinity)
                         .overlay(alignment: .topTrailing) { markBadge }
-                        .overlay(alignment: .bottom) { zoneHint }
+                        .overlay(alignment: .bottom) {
+                            if session.isMeasuring { zoneHint }
+                        }
                 }
                 .contentShape(Rectangle())
-                .onTapGesture { session.mark(.top) }
+                .onTapGesture { if session.isMeasuring { session.mark(.top) } }
 
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(Color.orange.opacity(session.isRunning ? 0.20 : 0.07))
-                    .frame(height: 190)
-                    .overlay { zoneLabel("UNTEN", "arrow.down.to.line", .orange) }
-                    .contentShape(Rectangle())
-                    .onTapGesture { session.mark(.bottom) }
-                    .padding(.top, 6)
+                if session.isMeasuring {
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(Color.orange.opacity(session.isRunning ? 0.20 : 0.07))
+                        .frame(height: 190)
+                        .overlay { zoneLabel("UNTEN", "arrow.down.to.line", .orange) }
+                        .contentShape(Rectangle())
+                        .onTapGesture { session.mark(.bottom) }
+                        .padding(.top, 6)
+                }
             }
 
             if let message = session.message {
@@ -43,7 +51,7 @@ struct ContentView: View {
                     .lineLimit(2)
             }
             stats
-            seriesStrip
+            if session.isMeasuring { seriesStrip }
             secondaryControls
             startButton
         }
@@ -183,6 +191,17 @@ struct ContentView: View {
                     .disabled(!session.hasRecording)
             }
         }
+    }
+
+    /// Training counts and nothing else. Measurement adds the tap zones and the series
+    /// label, and marks the set as reference data in the history.
+    private var modePicker: some View {
+        Picker("Modus", selection: $session.isMeasuring) {
+            Text("Training").tag(false)
+            Text("Messung").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .disabled(session.isRunning || session.countdown != nil)
     }
 
     /// What gets stamped onto the next recorded set. Sits above the Start button so it

@@ -31,13 +31,19 @@ struct SetRecord: Codable, Identifiable {
     /// bottom to top is the concentric phase, top to bottom the eccentric one.
     var manualBottoms: [Double] = []
 
+    /// "measurement" for a set recorded to tune the detector -- tapped along, labelled,
+    /// meant for export -- against "training" for ordinary use. Older records predate the
+    /// distinction and decode as training, which is what they were.
+    var purpose: String = "training"
+
     var isWrist: Bool { kind == "wrist" }
+    var isMeasurement: Bool { purpose == "measurement" }
 
     init(id: UUID, date: Date, duration: Double, sampleCount: Int, measuredRate: Double,
          count: Int, repTimes: [Double], medianCon: Double?,
          medianEcc: Double?, trueReps: Int?, note: String?, rawFile: String,
          kind: String = "stack", machine: String? = nil, manualMarks: [Double] = [],
-         manualBottoms: [Double] = []) {
+         manualBottoms: [Double] = [], purpose: String = "training") {
         self.id = id
         self.date = date
         self.duration = duration
@@ -54,6 +60,7 @@ struct SetRecord: Codable, Identifiable {
         self.machine = machine
         self.manualMarks = manualMarks
         self.manualBottoms = manualBottoms
+        self.purpose = purpose
     }
 
     /// Decoding tolerates missing keys instead of throwing.
@@ -80,6 +87,7 @@ struct SetRecord: Codable, Identifiable {
         machine = try c.decodeIfPresent(String.self, forKey: .machine)
         manualMarks = try c.decodeIfPresent([Double].self, forKey: .manualMarks) ?? []
         manualBottoms = try c.decodeIfPresent([Double].self, forKey: .manualBottoms) ?? []
+        purpose = try c.decodeIfPresent(String.self, forKey: .purpose) ?? "training"
     }
 
     var shortDate: String {
