@@ -241,9 +241,9 @@ struct ContentView: View {
             }
         } label: {
             Text(startTitle)
-                .font(.system(size: 40, weight: .bold, design: .rounded))
+                .font(.system(size: 30, weight: .bold, design: .rounded))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 44)
+                .padding(.vertical, 26)
                 .background(startColor)
                 .foregroundStyle(session.isRunning || session.countdown != nil
                                  ? Color.white : Color.black)
