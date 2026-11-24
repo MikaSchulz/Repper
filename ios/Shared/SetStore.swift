@@ -88,6 +88,55 @@ final class SetStore: ObservableObject {
         return urls
     }
 
+    /// Everything in one file: every raw CSV plus a single index carrying the counts,
+    /// notes, taps and mode. Two files per set means forty files for twenty sets, each
+    /// one a chance to lose track of which recording was which -- one archive is a single
+    /// AirDrop that cannot come apart.
+    ///
+    /// Zipping goes through NSFileCoordinator's `.forUploading`, which hands back a
+    /// zipped copy of a directory; Foundation offers no other archiver on iOS.
+    func exportArchiveURL() -> URL? {
+        let fm = FileManager.default
+        let staging = fm.temporaryDirectory.appendingPathComponent("Repper", isDirectory: true)
+        try? fm.removeItem(at: staging)
+        guard (try? fm.createDirectory(at: staging, withIntermediateDirectories: true)) != nil
+        else { return nil }
+
+        for record in records {
+            let source = rawURL(for: record)
+            guard fm.fileExists(atPath: source.path) else { continue }
+            try? fm.copyItem(at: source, to: staging.appendingPathComponent(record.rawFile))
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let index = try? encoder.encode(records) else { return nil }
+        try? index.write(to: staging.appendingPathComponent("index.json"))
+
+        let stamp = DateFormatter()
+        stamp.dateFormat = "yyyyMMdd-HHmm"
+        let destination = fm.temporaryDirectory
+            .appendingPathComponent("repper-\(stamp.string(from: Date())).zip")
+        try? fm.removeItem(at: destination)
+
+        var failure: NSError?
+        var result: URL?
+        NSFileCoordinator().coordinate(readingItemAt: staging, options: .forUploading,
+                                       error: &failure) { zipped in
+            if (try? fm.copyItem(at: zipped, to: destination)) != nil { result = destination }
+        }
+        return result
+    }
+
+    /// Bytes the archive will hold, for showing what is about to be shared.
+    var totalBytes: Int {
+        records.reduce(0) { sum, record in
+            let path = rawURL(for: record).path
+            let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+            return sum + ((attributes?[.size] as? Int) ?? 0)
+        }
+    }
+
     // MARK: - Persistence
 
     private func trim() {

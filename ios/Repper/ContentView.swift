@@ -2,8 +2,8 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var session = RepSession()
-    @State private var exportURL: URL?
     @State private var showHistory = false
+    @State private var showSettings = false
     @State private var showLabelEditor = false
     @State private var labelDraft = ""
     @Environment(\.scenePhase) private var scenePhase
@@ -60,6 +60,7 @@ struct ContentView: View {
         .background(Color.black.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showHistory) { HistoryView(store: session.store) }
+        .sheet(isPresented: $showSettings) { SettingsView(session: session) }
         .alert("Messreihe", isPresented: $showLabelEditor) {
             TextField("z. B. Handy flach auf Stack, langsam", text: $labelDraft)
             Button("Sichern") { session.seriesLabel = labelDraft }
@@ -155,8 +156,6 @@ struct ContentView: View {
                      ? String(format: "%.0f Hz", session.measuredRate) : "—", "Rate")
             statItem(String(format: "%.0f s", session.duration), "Dauer")
             statItem(phaseText, "con / ecc")
-            statItem(session.watchStatus.contains("erreichbar")
-                     && !session.watchStatus.contains("nicht erreichbar") ? "ja" : "nein", "Watch")
         }
         .font(.caption2)
     }
@@ -182,14 +181,8 @@ struct ContentView: View {
                 session.startDelay = nextDelay(after: session.startDelay)
             }
             smallButton("Verlauf", "\(session.store.records.count)") { showHistory = true }
-            smallButton("Demo", nil) { session.runDemo() }
-            smallButton("Reset", nil) { session.reset(); exportURL = nil }
-            if let url = exportURL {
-                ShareLink(item: url) { controlLabel("Teilen", nil) }
-            } else {
-                smallButton("Export", nil) { exportURL = session.exportCSV() }
-                    .disabled(!session.hasRecording)
-            }
+            smallButton("Reset", nil) { session.reset() }
+            smallButton("Mehr", nil) { showSettings = true }
         }
     }
 

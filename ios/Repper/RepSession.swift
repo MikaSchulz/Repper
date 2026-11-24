@@ -129,9 +129,6 @@ final class RepSession: ObservableObject {
         message = "Aufnahme von der Uhr empfangen: \(record.machine ?? "—")"
     }
 
-    var hasRecording: Bool { !recorded.isEmpty }
-
-
     /// Re-checks the watch link. The counterpart app may have launched after this one.
     func refreshWatchLink() {
         link.activate()
@@ -415,25 +412,6 @@ final class RepSession: ObservableObject {
             self.refresh()
             self.archiveIfNeeded()
             self.message = "Demo: Hochnehmen + 10 volle + 2 halbe — erwartet: 10"
-        }
-    }
-
-    // MARK: - Export of the set currently in memory
-
-    func exportCSV() -> URL? {
-        guard !recorded.isEmpty else { return nil }
-        var text = "t,x,y,z\n"
-        for s in recorded {
-            text += String(format: "%.5f,%.5f,%.5f,%.5f\n", s.t, s.x, s.y, s.z)
-        }
-        let name = String(format: "repper_%.0fs_%dreps.csv", duration, count)
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
-        do {
-            try text.write(to: url, atomically: true, encoding: .utf8)
-            return url
-        } catch {
-            message = "Export fehlgeschlagen: \(error.localizedDescription)"
-            return nil
         }
     }
 }

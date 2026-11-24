@@ -20,6 +20,8 @@ import argparse
 import itertools
 import json
 import sys
+import tempfile
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -31,8 +33,41 @@ from repper.io import load               # noqa: E402
 from repper.pipeline import detect_reps  # noqa: E402
 
 
+def unpack(target: Path) -> Path:
+    """A zip exported by the app, unpacked; anything else passed through.
+
+    "Alle Aufnahmen teilen" hands over one archive holding every raw signal plus an
+    index. Accepting it directly saves unzipping by hand, which is where recordings got
+    mixed up before.
+    """
+    if target.is_file() and target.suffix == ".zip":
+        out = Path(tempfile.mkdtemp(prefix="repper-"))
+        with zipfile.ZipFile(target) as z:
+            z.extractall(out)
+        print(f"entpackt nach {out}")
+        target = out
+    # the archive carries one top-level folder
+    if target.is_dir() and not any(target.glob("index.json")):
+        inner = [p for p in target.iterdir() if p.is_dir()]
+        if len(inner) == 1 and (inner[0] / "index.json").exists():
+            return inner[0]
+    return target
+
+
 def load_sets(folder: Path) -> list[dict]:
-    """Every summary with a raw file next to it and a hand-typed count."""
+    """Every record with a raw file next to it, from an index or the older summaries."""
+    index = folder / "index.json"
+    if index.exists():
+        out = []
+        for record in json.loads(index.read_text()):
+            raw = folder / record.get("rawFile", "")
+            if not raw.exists():
+                print(f"  übersprungen (Rohdatei fehlt): {record.get('rawFile')}")
+                continue
+            record["_raw"] = raw
+            out.append(record)
+        return out
+
     out = []
     for summary in sorted(folder.glob("summary_*.json")):
         try:
@@ -47,83 +82,6 @@ def load_sets(folder: Path) -> list[dict]:
         record["_raw"] = raw
         out.append(record)
     return out
-
-
-def score_timing(sets: list[dict]) -> None:
-    """Match detected repetitions against the taps, one by one.
-
-    The count alone hides a lot: a detector can be right in total and still have missed
-    one repetition and invented another. Matching in time shows that, and the median
-    offset says whether the detector is systematically early or late — a tap lands where
-    the lifter felt the repetition, the detector marks the peak of the velocity.
-    """
-    labelled = [s for s in sets if s.get("manualMarks")]
-    if not labelled:
-        return
-    variants = sorted({v for s in labelled for v in s.get("repTimes", {})})
-    if not variants:
-        return
-    print("\nAbgleich gegen die getippten Zeitpunkte (Toleranz 1,5 s)\n")
-    print(f"{'Variante':<10} {'Treffer':>8} {'zu viel':>8} {'fehlt':>7} {'Versatz':>10}")
-    for v in variants:
-        tp = fp = fn = 0
-        offsets: list[float] = []
-        for s in labelled:
-            taps = sorted(float(x) for x in s["manualMarks"])
-            found = sorted(float(x) for x in s.get("repTimes", {}).get(v, []))
-            used = [False] * len(found)
-            for tap in taps:
-                best, best_i = 1.5, -1
-                for i, f in enumerate(found):
-                    if used[i]:
-                        continue
-                    if abs(f - tap) < best:
-                        best, best_i = abs(f - tap), i
-                if best_i >= 0:
-                    used[best_i] = True
-                    tp += 1
-                    offsets.append(found[best_i] - tap)
-                else:
-                    fn += 1
-            fp += used.count(False)
-        offset = f"{np.median(offsets):+.2f} s" if offsets else "—"
-        print(f"{v:<10} {tp:>8} {fp:>8} {fn:>7} {offset:>10}")
-
-
-def score_phases(sets: list[dict]) -> None:
-    """Phase durations from the taps, compared with what the detector reports.
-
-    A tap at the bottom and the next tap at the top bracket the concentric phase; top to
-    the following bottom is the eccentric one. Until now those durations had no reference
-    at all outside synthetic signals.
-    """
-    labelled = [s for s in sets if s.get("manualMarks") and s.get("manualBottoms")]
-    if not labelled:
-        return
-    print("\nPhasendauern aus den Tipps (unten -> oben -> unten)\n")
-    print(f"{'Satz':<18} {'Wdh.':>5} {'con [s]':>9} {'ecc [s]':>9} "
-          f"{'App con':>9} {'App ecc':>9}")
-    for s in labelled:
-        tops = sorted(float(x) for x in s["manualMarks"])
-        bottoms = sorted(float(x) for x in s["manualBottoms"])
-        cons, eccs = [], []
-        for i, bottom in enumerate(bottoms):
-            after_top = [t for t in tops if t > bottom]
-            if not after_top:
-                continue
-            top = after_top[0]
-            cons.append(top - bottom)
-            next_bottom = [b for b in bottoms[i + 1:] if b > top]
-            if next_bottom:
-                eccs.append(next_bottom[0] - top)
-        if not cons:
-            continue
-        app_con = s.get("medianCon")
-        app_ecc = s.get("medianEcc")
-        print(f"{s['date'][:16]:<18} {len(cons):>5} {np.median(cons):>9.2f} "
-              f"{np.median(eccs) if eccs else float('nan'):>9.2f} "
-              f"{app_con if app_con is not None else float('nan'):>9.2f} "
-              f"{app_ecc if app_ecc is not None else float('nan'):>9.2f}")
 
 
 def score_counts(sets: list[dict]) -> None:
@@ -246,17 +204,20 @@ def sweep(sets: list[dict], grid: dict) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("folder", type=Path)
+    ap.add_argument("folder", type=Path,
+                    help="ZIP aus 'Alle Aufnahmen teilen', oder ein Ordner damit")
     ap.add_argument("--sweep", action="store_true",
                     help="Parametersuche über die Rohsignale statt nur der App-Zahlen")
     args = ap.parse_args()
 
-    if not args.folder.is_dir():
-        sys.exit(f"kein Ordner: {args.folder}")
+    if not args.folder.exists():
+        sys.exit(f"nicht gefunden: {args.folder}")
+    folder = unpack(args.folder)
 
-    sets = load_sets(args.folder)
+    sets = load_sets(folder)
     if not sets:
-        sys.exit("keine Sätze gefunden (erwartet summary_*.json neben set_*.csv)")
+        sys.exit("keine Sätze gefunden (erwartet index.json oder summary_*.json "
+                 "neben set_*.csv)")
 
     score_counts(sets)
     score_timing(sets)
