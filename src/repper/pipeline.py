@@ -106,7 +106,7 @@ def integrate(a: np.ndarray, fs: float) -> np.ndarray:
     return v
 
 
-def detrend_poly(v: np.ndarray, order: int = 3) -> np.ndarray:
+def detrend_poly(v: np.ndarray, order: int = 2) -> np.ndarray:
     """Polynomial fit over the integrated signal, subtracted -> drift compensation."""
     n = len(v)
     if n <= order + 1:
@@ -245,7 +245,7 @@ def detect_reps(
     smooth_s: float = 0.25,
     hampel_s: float = 0.10,
     baseline_s: float | None = None,
-    detrend_order: int = 3,
+    detrend_order: int = 2,
     min_snr: float = 0.5,
     gravity_removed: bool = False,
 ) -> RepDetection:
@@ -312,15 +312,33 @@ def _median_rate(t: np.ndarray) -> float:
 
 
 def _assign_phases(det: RepDetection) -> None:
-    """Concentric = positive lobe around each peak, eccentric = following negative lobe."""
+    """Concentric = positive lobe around each peak, eccentric = following negative lobe.
+
+    A recording that starts with the stack already moving has no zero crossing before
+    the first peak, so that repetition has no onset of its own. Falling back to the
+    start of the window would stretch it to whatever the recording happens to begin at.
+    The published algorithm fills it from the other repetitions instead
+    (`if con[0].isEmpty(): con[0] = mean(con[1:end])`).
+    """
     v, t = det.velocity, det.t
     zc = _zero_crossings(v)
-    for p in det.peaks:
+    first_has_onset = True
+    for k, p in enumerate(det.peaks):
         before = zc[zc < p]
         after = zc[zc > p]
-        c_start = t[before[-1]] if len(before) else t[0]
+        if len(before):
+            c_start = t[before[-1]]
+        else:
+            c_start = t[0]
+            if k == 0:
+                first_has_onset = False
         c_end = t[after[0]] if len(after) else t[-1]
         e_start = c_end
         e_end = t[after[1]] if len(after) > 1 else t[-1]
         det.concentric.append((float(c_start), float(c_end)))
         det.eccentric.append((float(e_start), float(e_end)))
+
+    if not first_has_onset and len(det.concentric) > 1:
+        others = [b - a for a, b in det.concentric[1:]]
+        end = det.concentric[0][1]
+        det.concentric[0] = (end - float(np.mean(others)), end)

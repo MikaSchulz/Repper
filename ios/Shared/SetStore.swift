@@ -63,6 +63,34 @@ final class SetStore: ObservableObject {
         save()
     }
 
+    /// The raw signal of a stored set, back as samples, so a past set can be re-analysed
+    /// and drawn without going through an export.
+    func samples(for record: SetRecord) -> [MotionSample] {
+        guard let text = try? String(contentsOf: rawURL(for: record), encoding: .utf8)
+        else { return [] }
+        var out: [MotionSample] = []
+        out.reserveCapacity(record.sampleCount)
+        for line in text.split(separator: "\n").dropFirst() {
+            let f = line.split(separator: ",")
+            guard f.count >= 4,
+                  let t = Double(f[0]), let x = Double(f[1]),
+                  let y = Double(f[2]), let z = Double(f[3]) else { continue }
+            out.append(MotionSample(t: t, x: x, y: y, z: z))
+        }
+        return out
+    }
+
+    /// Marks corrected after the fact. Tapping while lifting is rough -- the hand is busy
+    /// and the tap lands late -- so the stored times are a first pass, not the reference.
+    /// `trueReps` follows the top marks, which is the rule the recording already used.
+    func setMarks(tops: [Double], bottoms: [Double], for record: SetRecord) {
+        guard let i = records.firstIndex(where: { $0.id == record.id }) else { return }
+        records[i].manualMarks = tops.sorted().map { ($0 * 1000).rounded() / 1000 }
+        records[i].manualBottoms = bottoms.sorted().map { ($0 * 1000).rounded() / 1000 }
+        records[i].trueReps = tops.isEmpty ? nil : tops.count
+        save()
+    }
+
     func setTrueReps(_ value: Int?, for record: SetRecord) {
         guard let i = records.firstIndex(where: { $0.id == record.id }) else { return }
         records[i].trueReps = value

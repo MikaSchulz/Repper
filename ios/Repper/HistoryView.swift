@@ -18,7 +18,18 @@ struct HistoryView: View {
                 } else {
                     List {
                         ForEach(store.records) { record in
-                            SetRow(record: record, store: store)
+                            if record.isWrist {
+                                SetRow(record: record, store: store)
+                            } else {
+                                // A wrist recording carries gravity-free acceleration and
+                                // attitude; the stack pipeline would draw nonsense for it,
+                                // so it stays a list row.
+                                NavigationLink {
+                                    SetDetailView(record: record, store: store)
+                                } label: {
+                                    SetRow(record: record, store: store)
+                                }
+                            }
                         }
                         .onDelete { indexSet in
                             indexSet.map { store.records[$0] }.forEach(store.delete)
