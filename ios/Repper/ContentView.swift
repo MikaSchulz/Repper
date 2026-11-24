@@ -4,6 +4,8 @@ struct ContentView: View {
     @StateObject private var session = RepSession()
     @State private var exportURL: URL?
     @State private var showHistory = false
+    @State private var showLabelEditor = false
+    @State private var labelDraft = ""
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -44,6 +46,7 @@ struct ContentView: View {
                     .lineLimit(2)
             }
             stats
+            seriesStrip
             secondaryControls
             startButton
         }
@@ -52,6 +55,15 @@ struct ContentView: View {
         .background(Color.black.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showHistory) { HistoryView(store: session.store) }
+        .alert("Messreihe", isPresented: $showLabelEditor) {
+            TextField("z. B. Handy flach auf Stack, langsam", text: $labelDraft)
+            Button("Sichern") { session.seriesLabel = labelDraft }
+            Button("Leeren", role: .destructive) { session.seriesLabel = "" }
+            Button("Abbrechen", role: .cancel) { }
+        } message: {
+            Text("Wird auf jeden Satz gestempelt, bis du sie änderst. "
+                 + "Beschreib, wie das Handy liegt und wie du dich bewegst.")
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { session.refreshWatchLink() }
         }
@@ -168,6 +180,33 @@ struct ContentView: View {
                     .disabled(!session.hasRecording)
             }
         }
+    }
+
+    /// What gets stamped onto the next recorded set. Sits above the Start button so it
+    /// is read right before a set, which is the moment a stale label would do damage.
+    private var seriesStrip: some View {
+        Button {
+            labelDraft = session.seriesLabel
+            showLabelEditor = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: session.seriesLabel.isEmpty
+                      ? "tag" : "tag.fill")
+                    .font(.caption2)
+                Text(session.seriesLabel.isEmpty ? "Messreihe benennen" : session.seriesLabel)
+                    .font(.caption)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "pencil").font(.caption2)
+            }
+            .foregroundStyle(session.seriesLabel.isEmpty ? Color.secondary : Color.orange)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity)
+            .background(Color.white.opacity(0.07))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
     }
 
     private func nextDelay(after value: Int) -> Int {

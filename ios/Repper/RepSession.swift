@@ -33,6 +33,13 @@ final class RepSession: ObservableObject {
     /// repetition begins. The two together bracket every repetition.
     @Published private(set) var manualBottoms: [Double] = []
 
+    /// What this measurement series is: how the phone is held or placed, which machine,
+    /// which tempo. Stamped onto every set recorded while it is set, so a run of twenty
+    /// sets does not have to be labelled twenty times. Survives a restart.
+    @Published var seriesLabel: String {
+        didSet { UserDefaults.standard.set(seriesLabel, forKey: Self.labelKey) }
+    }
+
     /// Seconds between tapping Start and the first sample, like a camera self-timer:
     /// time to put the phone on the stack and get into position.
     @Published var startDelay: Int {
@@ -42,6 +49,7 @@ final class RepSession: ObservableObject {
     let store = SetStore()
 
     private static let delayKey = "startDelaySeconds"
+    private static let labelKey = "seriesLabel"
 
     private let motion = CMMotionManager()
     private let counter = RepCounter()
@@ -55,6 +63,7 @@ final class RepSession: ObservableObject {
 
     init() {
         startDelay = UserDefaults.standard.integer(forKey: Self.delayKey)
+        seriesLabel = UserDefaults.standard.string(forKey: Self.labelKey) ?? ""
         link.onCommand = { [weak self] cmd in
             guard let self else { return }
             switch cmd {
@@ -326,7 +335,7 @@ final class RepSession: ObservableObject {
             medianCon: medianCon,
             medianEcc: medianEcc,
             trueReps: manualMarks.isEmpty ? nil : manualMarks.count,
-            note: nil,
+            note: seriesLabel.isEmpty ? nil : seriesLabel,
             rawFile: name,
             manualMarks: manualMarks.map { ($0 * 1000).rounded() / 1000 },
             manualBottoms: manualBottoms.map { ($0 * 1000).rounded() / 1000 }

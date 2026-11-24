@@ -46,6 +46,7 @@ struct HistoryView: View {
 private struct SetRow: View {
     let record: SetRecord
     @ObservedObject var store: SetStore
+    @State private var note: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -71,6 +72,21 @@ private struct SetRow: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+
+            // Carried over from the series label when the set was recorded, editable
+            // afterwards: a mislabelled recording is worse than an unlabelled one.
+            TextField("Wie bewegt? (z. B. Handy flach, Arm 90°)", text: $note, axis: .vertical)
+                .font(.caption)
+                .lineLimit(1...3)
+                .textFieldStyle(.plain)
+                .onAppear { note = record.note ?? "" }
+                .onChange(of: record.note) { _, new in
+                    if new ?? "" != note { note = new ?? "" }
+                }
+                // Saved on every keystroke, not on submit: tapping away from the field
+                // is the normal way to leave it, and that must not drop the text.
+                .onChange(of: note) { _, new in store.setNote(new, for: record) }
+                .submitLabel(.done)
 
             if record.isWrist {
                 Text("Rohaufnahme mit Lage — wird am Rechner ausgewertet, nicht hier gezählt.")

@@ -11,7 +11,9 @@ final class SetStore: ObservableObject {
     private let dir: URL
     private let indexURL: URL
 
-    init(limit: Int = 10) {
+    /// A measurement series runs to a few dozen sets. Ten was enough to survive a
+    /// mis-tap on Reset but would drop the first half of a data-collection session.
+    init(limit: Int = 50) {
         self.limit = limit
         let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         dir = base.appendingPathComponent("recordings", isDirectory: true)
@@ -49,6 +51,15 @@ final class SetStore: ObservableObject {
         }
         records.insert(record, at: 0)
         trim()
+        save()
+    }
+
+    /// How the phone was moved for this set, typed in by hand. Without it an export is
+    /// a pile of numbers that cannot be told apart.
+    func setNote(_ value: String?, for record: SetRecord) {
+        guard let i = records.firstIndex(where: { $0.id == record.id }) else { return }
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        records[i].note = (trimmed?.isEmpty ?? true) ? nil : trimmed
         save()
     }
 
