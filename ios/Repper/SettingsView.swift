@@ -15,6 +15,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                feedbackSection
                 exportSection
                 watchSection
                 demoSection
@@ -30,6 +31,22 @@ struct SettingsView: View {
                 archive = session.store.exportArchiveURL()
                 building = false
             }
+        }
+    }
+
+    // MARK: - Feedback
+
+    private var feedbackSection: some View {
+        Section {
+            Toggle("Vibration", isOn: $session.vibrateOnRep)
+            Toggle("Zahl ansagen", isOn: $session.speakCount)
+        } header: {
+            Text("Rückmeldung pro Wiederholung")
+        } footer: {
+            Text("Mit dem Handy auf dem Stapel liest niemand den Zähler. Die Ansage "
+                 + "spielt auch bei stummgeschaltetem Klingelton und mischt sich unter "
+                 + "laufende Musik. Beides meldet erst, wenn der Zähler bestätigt hat — "
+                 + "etwa eine halbe Sekunde nach der Wiederholung.")
         }
     }
 

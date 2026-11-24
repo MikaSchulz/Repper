@@ -33,6 +33,24 @@ final class RepSession: ObservableObject {
     /// repetition begins. The two together bracket every repetition.
     @Published private(set) var manualBottoms: [Double] = []
 
+    /// A tap on the taptic engine per counted repetition, so the count is readable
+    /// without looking at a phone that is lying on a weight stack.
+    @Published var vibrateOnRep: Bool {
+        didSet {
+            UserDefaults.standard.set(vibrateOnRep, forKey: Self.vibrateKey)
+            feedback.vibrate = vibrateOnRep
+        }
+    }
+
+    /// The count spoken aloud. Off by default: useful alone in a gym, less so otherwise.
+    @Published var speakCount: Bool {
+        didSet {
+            UserDefaults.standard.set(speakCount, forKey: Self.speakKey)
+            feedback.speak = speakCount
+            if speakCount { feedback.prepare() } else { feedback.release() }
+        }
+    }
+
     /// Measurement mode shows the two tap zones and stamps the series label; training
     /// mode is the plain counter. Sets are archived either way -- the history exists so a
     /// mis-tap on Reset costs nothing, and that is true in both modes.
@@ -58,6 +76,8 @@ final class RepSession: ObservableObject {
     private static let delayKey = "startDelaySeconds"
     private static let labelKey = "seriesLabel"
     private static let measureKey = "isMeasuring"
+    private static let vibrateKey = "vibrateOnRep"
+    private static let speakKey = "speakCount"
 
     private let motion = CMMotionManager()
     private let counter = RepCounter()
@@ -85,11 +105,18 @@ final class RepSession: ObservableObject {
     private var countdownTask: Task<Void, Never>?
     private var archived = true                                // current data already stored?
     private let link = PhoneLink()
+    private let feedback = Feedback()
+    private var announced = 0              // repetitions already signalled
 
     init() {
         startDelay = UserDefaults.standard.integer(forKey: Self.delayKey)
         seriesLabel = UserDefaults.standard.string(forKey: Self.labelKey) ?? ""
         isMeasuring = UserDefaults.standard.bool(forKey: Self.measureKey)
+        // Absent means first launch, where the tap should be on.
+        vibrateOnRep = UserDefaults.standard.object(forKey: Self.vibrateKey) as? Bool ?? true
+        speakCount = UserDefaults.standard.bool(forKey: Self.speakKey)
+        feedback.vibrate = vibrateOnRep
+        feedback.speak = speakCount
         link.onCommand = { [weak self] cmd in
             guard let self else { return }
             switch cmd {
@@ -221,6 +248,8 @@ final class RepSession: ObservableObject {
         #if canImport(UIKit)
         UIApplication.shared.isIdleTimerDisabled = true       // display must stay on
         #endif
+        announced = 0
+        feedback.prepare()
 
         // Raw accelerometer, NOT deviceMotion.userAcceleration: the counter needs the
         // gravity component. |a| - g is the signed acceleration along the stack axis,
@@ -248,6 +277,7 @@ final class RepSession: ObservableObject {
         UIApplication.shared.isIdleTimerDisabled = false
         #endif
         refresh()
+        feedback.release()
         archiveIfNeeded()
     }
 
@@ -278,6 +308,7 @@ final class RepSession: ObservableObject {
         recorded.removeAll()
         clearInbox()
         count = 0
+        announced = 0
     }
 
     private func clearInbox() {
@@ -322,6 +353,15 @@ final class RepSession: ObservableObject {
         drainInbox()
         let analysis = isRunning || demoTask != nil ? counter.update() : counter.last
         count = counter.count
+        if count > announced {
+            // One signal per repetition, even when a pass confirms several at once.
+            while announced < count {
+                announced += 1
+                feedback.counted(announced)
+            }
+        } else if count < announced {
+            announced = count          // a reset or a withdrawn repetition
+        }
         sampleCount = recorded.count
         duration = recorded.last?.t ?? 0
 
