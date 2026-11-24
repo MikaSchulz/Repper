@@ -53,8 +53,25 @@ final class RepSession: ObservableObject {
 
     private let motion = CMMotionManager()
     private let counter = RepCounter()
+
+    /// Sensor delivery runs off the main thread. At 100 Hz on the main queue every
+    /// sample competes with SwiftUI redrawing the live plot, and a delayed callback
+    /// carries a delayed timestamp -- the very error source the published study names
+    /// for its own recordings. Samples land in `inbox` on the sensor queue and are
+    /// drained on the main actor by the 0.25 s timer, in order.
+    private let sensorQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "repper.accelerometer"
+        q.maxConcurrentOperationCount = 1          // keep samples in order
+        q.qualityOfService = .userInitiated
+        return q
+    }()
+    private let inboxLock = NSLock()
+    private nonisolated(unsafe) var inbox: [MotionSample] = []
     private var recorded: [MotionSample] = []                  // full resolution, for export
-    private var t0: Double?
+    /// Timestamp of the first sample of this recording. Written on the sensor queue,
+    /// cleared on the main actor, so every access goes through `inboxLock`.
+    private nonisolated(unsafe) var t0Raw: Double?
     private var timer: Timer?
     private var demoTask: Task<Void, Never>?
     private var countdownTask: Task<Void, Never>?
@@ -203,9 +220,9 @@ final class RepSession: ObservableObject {
         // gravity component. |a| - g is the signed acceleration along the stack axis,
         // which is what makes the phone's orientation on the stack irrelevant.
         motion.accelerometerUpdateInterval = 1.0 / 100.0
-        motion.startAccelerometerUpdates(to: .main) { [weak self] data, _ in
+        motion.startAccelerometerUpdates(to: sensorQueue) { [weak self] data, _ in
             guard let self, let d = data else { return }
-            MainActor.assumeIsolated { self.ingest(d) }        // delivered on the main queue
+            self.buffer(d)
         }
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
@@ -235,7 +252,7 @@ final class RepSession: ObservableObject {
         recorded.removeAll()
         manualMarks.removeAll()
         manualBottoms.removeAll()
-        t0 = nil
+        clearInbox()
         count = 0
         sampleCount = 0
         duration = 0
@@ -253,22 +270,41 @@ final class RepSession: ObservableObject {
     private func clearCounters() {
         counter.reset()
         recorded.removeAll()
-        t0 = nil
+        clearInbox()
         count = 0
+    }
+
+    private func clearInbox() {
+        inboxLock.lock()
+        inbox.removeAll(keepingCapacity: true)
+        t0Raw = nil
+        inboxLock.unlock()
     }
 
     // MARK: - Recording
 
     /// One accelerometer sample: G units incl. gravity -> m/s^2, timestamps relative
-    /// to the first sample of this recording.
-    private func ingest(_ d: CMAccelerometerData) {
+    /// to the first sample of this recording. Runs on the sensor queue, so it only
+    /// parks the sample; nothing here touches published state.
+    private nonisolated func buffer(_ d: CMAccelerometerData) {
         let g = Signal.gravity
-        if t0 == nil { t0 = d.timestamp }
-        let sample = MotionSample(t: d.timestamp - (t0 ?? d.timestamp),
+        inboxLock.lock()
+        if t0Raw == nil { t0Raw = d.timestamp }
+        let origin = t0Raw ?? d.timestamp
+        inbox.append(MotionSample(t: d.timestamp - origin,
                                   x: d.acceleration.x * g,
                                   y: d.acceleration.y * g,
-                                  z: d.acceleration.z * g)
-        push(sample)
+                                  z: d.acceleration.z * g))
+        inboxLock.unlock()
+    }
+
+    /// Hands everything the sensor queue parked since the last pass to the counter.
+    private func drainInbox() {
+        inboxLock.lock()
+        let batch = inbox
+        inbox.removeAll(keepingCapacity: true)
+        inboxLock.unlock()
+        for s in batch { push(s) }
     }
 
     private func push(_ sample: MotionSample) {
@@ -277,6 +313,7 @@ final class RepSession: ObservableObject {
     }
 
     private func refresh() {
+        drainInbox()
         let analysis = isRunning || demoTask != nil ? counter.update() : counter.last
         count = counter.count
         sampleCount = recorded.count
