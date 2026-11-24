@@ -301,6 +301,7 @@ def detect_reps(
     detrend_order: int = 3,
     min_snr: float = 0.5,
     min_activity: float = 0.12,
+    legacy: bool = False,
     min_rom_frac: float = 0.65,
     rom_max_cadence_s: float = 5.0,
     gravity_removed: bool = False,
@@ -319,6 +320,12 @@ def detect_reps(
     prominence_frac : peak prominence threshold as a fraction of the 90th
         percentile of |velocity|. Scale-free, so it survives different machines
         and loads without recalibration.
+    legacy : the detector as the paper describes it, without anything added here: no
+        range-of-motion gate, no local idle guard. Every movement that clears the peak
+        detector counts, including lifting the stack into the starting position and a
+        repetition that only makes it half way. Kept switchable because it is the version
+        that was in the gym first, and comparing against it on the same set is the only
+        way to tell whether the additions earn their keep.
     min_rom_frac : range-of-motion gate. A candidate is only counted if its concentric
         displacement — the area under its velocity lobe, i.e. how far the stack actually
         travelled — reaches this fraction of the running median of the repetitions
@@ -387,12 +394,12 @@ def detect_reps(
             min_distance=max(1, int(round(min_rep_s * fs))),
             min_prominence=prominence_frac * scale if scale > 0 else 0.0,
         )
-        if len(peaks):
+        if len(peaks) and not legacy:
             alive = local_activity[peaks] >= min_activity
             peaks, prom = peaks[alive], prom[alive]
 
     cadence = float(np.median(np.diff(tt[peaks]))) if len(peaks) > 2 else 0.0
-    if min_rom_frac > 0 and len(peaks) and cadence <= rom_max_cadence_s:
+    if min_rom_frac > 0 and not legacy and len(peaks) and cadence <= rom_max_cadence_s:
         travels = np.array([lobe_displacement(v, int(p), fs) for p in peaks])
         keep = np.flatnonzero(classify_by_travel(travels, min_rom_frac))
         peaks, prom = peaks[keep], prom[keep]

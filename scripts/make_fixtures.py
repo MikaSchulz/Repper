@@ -50,10 +50,13 @@ def main() -> None:
                               for t, x, y, z in zip(s.t, s.ax, s.ay, s.az)]
         (OUT / f"{name}.csv").write_text("\n".join(rows) + "\n")
         det = detect_reps(s.t, s.ax, s.ay, s.az, fs=100.0)
+        legacy = detect_reps(s.t, s.ax, s.ay, s.az, fs=100.0, legacy=True)
         meta[name] = {"machine": machine, "tempo_scale": tempo, "record_hz": fs,
                       "true_reps": s.count, "python_reps": det.count,
+                      "python_legacy": legacy.count,
                       "true_times": [round(float(x), 3) for x in s.rep_times]}
-        print(f"{name}: true={s.count} python={det.count} ({len(s.t)} samples @ {fs:.0f} Hz)")
+        print(f"{name}: true={s.count} python={det.count} legacy={legacy.count} "
+              f"({len(s.t)} samples @ {fs:.0f} Hz)")
     (OUT / "expected.json").write_text(json.dumps(meta, indent=2) + "\n")
 
 

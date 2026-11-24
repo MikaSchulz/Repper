@@ -211,7 +211,19 @@ ios/Tests/         Paritätstest gegen dieselben Fixtures wie Python und JS
 ```
 
 Die iPhone-App zeichnet jeden Satz mit vier parallel laufenden Algorithmus-Varianten auf
-(A Standard, B ohne ROM-Gate, C strengeres ROM, D empfindlichere Peaks). Zwischen ihnen
+(A Standard, **B Original nach Paper**, C strengeres ROM, D empfindlichere Peaks).
+
+**B ist der Algorithmus, wie das Paper ihn beschreibt** — ohne alles, was hier später
+dazukam: kein Bewegungsumfang-Gate, keine lokale Ruhe-Prüfung, und nichts wird je wieder
+zurückgenommen. In Python über `detect_reps(..., legacy=True)`. Er ist absichtlich
+erhalten, weil er die Fassung ist, die zuerst im Studio lief; nur im direkten Vergleich am
+selben Satz lässt sich sagen, ob die Zusätze ihren Preis wert sind. Auf den Testaufnahmen:
+
+| | wahr | B (Original) | A (aktuell) |
+|---|---|---|---|
+| 8 saubere Sätze | — | alle richtig | alle richtig |
+| mit Teilwiederholungen | 8 | 10 | 8 |
+| mit Hochnehmen + halber letzter | 10 | 12 | 10 | Zwischen ihnen
 lässt sich live umschalten — Zahl, Kurve und Markierungen folgen der Auswahl — und jeder
 Parameter ist zur Laufzeit einstellbar; nach jeder Änderung wird der aufgezeichnete Satz
 sofort neu durchgerechnet. Die letzten zehn

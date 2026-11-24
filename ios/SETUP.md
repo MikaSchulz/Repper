@@ -127,6 +127,11 @@ dann, wenn du versehentlich Reset drückst. Pro Satz: was jede Variante gezählt
 Rohaufnahme, und ein Feld für die tatsächliche Wiederholungszahl. Trag die ein, dann
 färben sich passende Varianten grün und daneben liegende orange.
 
+**Variante B ist der Original-Algorithmus** aus dem Paper, ohne die späteren Zusätze.
+Damit kannst du im Studio am selben Satz vergleichen: A zählt mit Bewegungsumfang-Prüfung
+und Selbstkorrektur, B zählt jede Bewegung, die der Peak-Detektor findet — inklusive
+Hochnehmen und halber Wiederholungen.
+
 **Vier Varianten gleichzeitig.** Unter der Kurve stehen A bis D — vier Parametersätze,
 die denselben Datenstrom parallel auswerten. Tippen schaltet um: die große Zahl, die
 Kurve und die roten Punkte gehören dann zu dieser Variante. Umschalten ist verlustfrei,

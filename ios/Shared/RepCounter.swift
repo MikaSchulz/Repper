@@ -18,6 +18,11 @@ struct RepConfig: Codable, Equatable {
     var minWindowS = 4.0        // do not judge a window shorter than this
     var minSnr = 0.5            // movement band vs. sensor noise over the window: idle
     var minActivity = 0.12      // local movement vs. the window's own level: standing still
+    /// The detector as the paper describes it, without anything added here: no
+    /// range-of-motion gate, no local idle guard, and nothing is ever withdrawn once
+    /// counted. The version that was in the gym first; kept switchable so the additions
+    /// can be judged against it on the same set.
+    var legacy = false
     var minRomFrac = 0.65       // reject peaks whose stack travel falls below this share
     var romMaxCadenceS = 5.0    // slower than this, the travel estimate is too noisy to gate
     var romSettleS = 1.0        // how far inside the window a lobe must sit before judging
@@ -48,6 +53,7 @@ struct RepConfig: Codable, Equatable {
         romSettleS = try c.decodeIfPresent(Double.self, forKey: .romSettleS) ?? d.romSettleS
         minPasses = try c.decodeIfPresent(Int.self, forKey: .minPasses) ?? d.minPasses
         minHitRate = try c.decodeIfPresent(Double.self, forKey: .minHitRate) ?? d.minHitRate
+        legacy = try c.decodeIfPresent(Bool.self, forKey: .legacy) ?? d.legacy
     }
 }
 
@@ -188,14 +194,19 @@ final class RepCounter {
         for c in candidates where c.t >= windowStart && c.t <= tNow - cfg.confirmLagS {
             c.passes += 1
         }
-        candidates.removeAll { c in
-            c.passes >= cfg.minPasses && Double(c.sightings) / Double(c.passes) < cfg.minHitRate
+        if !cfg.legacy {
+            candidates.removeAll { c in
+                c.passes >= cfg.minPasses
+                    && Double(c.sightings) / Double(c.passes) < cfg.minHitRate
+            }
         }
         candidates.sort { $0.t < $1.t }
 
         let judged = candidates.filter { $0.sightings >= cfg.sightings && $0.travel != nil }
+        // In legacy mode a repetition stays counted once it is counted: no re-judging,
+        // and therefore no withdrawal either.
         let accepted: [Bool]
-        if gateActive(for: judged.map(\.t)) {
+        if !cfg.legacy && gateActive(for: judged.map(\.t)) {
             accepted = Signal.classifyByTravel(judged.map { $0.travel ?? 0 },
                                                minFrac: cfg.minRomFrac)
         } else {
@@ -325,7 +336,8 @@ final class RepCounter {
         let found = quiet ? [] : Signal.findPeaks(vel,
                                                   minDistance: Int((cfg.minRepS * cfg.fs).rounded()),
                                                   minProminence: cfg.promFrac * scale)
-        let peaks = found.filter { activity[$0] / activityScale >= cfg.minActivity }
+        let peaks = cfg.legacy ? found
+                               : found.filter { activity[$0] / activityScale >= cfg.minActivity }
 
         let tailStart = max(0, activity.count - Int((2.0 * cfg.fs).rounded()))
         let tail = activity[tailStart...]

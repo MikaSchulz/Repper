@@ -3,7 +3,7 @@
  *
  *   node test/js_parity.mjs
  */
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -14,26 +14,40 @@ const fixtures = join(here, 'fixtures');
 const expected = JSON.parse(readFileSync(join(fixtures, 'expected.json'), 'utf8'));
 
 let failures = 0;
+const streaming = {};
 
 for (const name of Object.keys(expected)) {
   const exp = expected[name];
   const rows = readFileSync(join(fixtures, `${name}.csv`), 'utf8').trim().split('\n').slice(1);
   const counter = new RepCounter();
+  const legacyCounter = new RepCounter({legacy: true});
 
   // replay as a stream: push samples, update every ~250 ms of signal time
   let nextUpdate = 0;
   for (const line of rows) {
     const [t, x, y, z] = line.split(',').map(Number);
     counter.push(t, x, y, z);
-    if (t >= nextUpdate) { counter.update(); nextUpdate = t + 0.25; }
+    legacyCounter.push(t, x, y, z);
+    if (t >= nextUpdate) {
+      counter.update();
+      legacyCounter.update();
+      nextUpdate = t + 0.25;
+    }
   }
   counter.update();
+  legacyCounter.update();
 
+  // Legacy streaming is compared against Swift, not against Python: without the
+  // hit-rate filter a transient candidate survives in a sliding window, which the
+  // offline pass never forms in the first place. That is a property of the mode, not a
+  // defect, so this run records the number and `ios/Tests/run_parity.swift` has to match.
+  streaming[name] = {legacy: legacyCounter.count, standard: counter.count};
   const ok = counter.count === exp.true_reps && counter.count === exp.python_reps;
   if (!ok) failures++;
   console.log(
     `${ok ? 'PASS' : 'FAIL'}  ${name.padEnd(18)} js=${counter.count} ` +
-    `python=${exp.python_reps} truth=${exp.true_reps}` +
+    `python=${exp.python_reps} truth=${exp.true_reps} ` +
+    `| legacy js=${legacyCounter.count} python-offline=${exp.python_legacy ?? '-'}` +
     (() => {
       const done = counter.phases.filter(Boolean);
       return done.length
@@ -60,5 +74,6 @@ function med(pairs, k) {
   return s[s.length >> 1];
 }
 
+writeFileSync(join(fixtures, 'streaming.json'), JSON.stringify(streaming, null, 2) + '\n');
 console.log(failures ? `\n${failures} failing fixture(s)` : '\nall fixtures pass');
 process.exit(failures ? 1 : 0);

@@ -96,6 +96,23 @@ class TestPartialRepetitions(unittest.TestCase):
                 self.assertEqual(detect_reps(s.t, s.ax, s.ay, s.az).count, 12)
 
 
+class TestLegacyMode(unittest.TestCase):
+    """The detector as the paper describes it, kept switchable for comparison."""
+
+    def test_full_sets_are_counted_the_same(self):
+        for machine in ("CHEST PRESS", "LEG PRESS", "ABDUCTOR"):
+            s = make_set(machine=machine, reps=12, rng=np.random.default_rng(9))
+            with self.subTest(machine):
+                self.assertEqual(detect_reps(s.t, s.ax, s.ay, s.az, legacy=True).count, 12)
+
+    def test_legacy_counts_what_the_additions_reject(self):
+        s = make_set(machine="LEG PRESS", reps=12, partials={0: 0.25, 11: 0.50},
+                     rng=np.random.default_rng(42))
+        self.assertEqual(s.count, 10)                       # ground truth
+        self.assertEqual(detect_reps(s.t, s.ax, s.ay, s.az).count, 10)
+        self.assertEqual(detect_reps(s.t, s.ax, s.ay, s.az, legacy=True).count, 12)
+
+
 class TestTempoRobustness(unittest.TestCase):
     def test_all_machines_all_tempos(self):
         from repper.synth import MACHINE_TIMING

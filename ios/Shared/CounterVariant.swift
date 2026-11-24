@@ -12,10 +12,11 @@ struct CounterVariant: Identifiable, Hashable {
     static let all: [CounterVariant] = [
         CounterVariant(id: "A", label: "A · Standard", detail: "aktuelle Voreinstellung",
                        config: .default),
-        CounterVariant(id: "B", label: "B · ohne ROM-Gate", detail: "zählt angesetzte Wdh. mit",
+        CounterVariant(id: "B", label: "B · Original (Paper)",
+                       detail: "ohne alle späteren Zusätze",
                        config: {
                            var c = RepConfig.default
-                           c.minRomFrac = 0
+                           c.legacy = true
                            return c
                        }()),
         CounterVariant(id: "C", label: "C · ROM 0,70", detail: "strengerer Bewegungsumfang",

@@ -26,6 +26,11 @@ export const DEFAULTS = {
   minHitRate: 0.4,    // share of those passes it has to be re-detected in to survive
   minSnr: 0.5,        // movement band vs. sensor noise; below this the window is idle
   minActivity: 0.12,  // local movement vs. the window's own peak level; below this: standing still
+  // The detector as the paper describes it, without anything added here: no
+  // range-of-motion gate, no local idle guard, and nothing is ever withdrawn once
+  // counted. The version that was in the gym first; kept switchable so the additions
+  // can be judged against it on the same set.
+  legacy: false,
 };
 
 export function hampel(x, win) {
@@ -243,7 +248,7 @@ export function analyseWindow(samples, opt = {}) {
   const localActivity = activity.map(a => a / activityScale);
 
   const found = quiet ? [] : findPeaks(vel, Math.round(o.minRepS * o.fs), o.promFrac * scale);
-  const peaks = found.filter(p => localActivity[p] >= o.minActivity);
+  const peaks = o.legacy ? found : found.filter(p => localActivity[p] >= o.minActivity);
 
   const tailFrom = Math.max(0, localActivity.length - Math.round(2.0 * o.fs));
   const tail = localActivity.slice(tailFrom);
@@ -357,13 +362,17 @@ export class RepCounter {
     for (const c of this.candidates) {
       if (c.t >= windowStart && c.t <= tNow - this.o.confirmLagS) c.passes = (c.passes || 0) + 1;
     }
-    this.candidates = this.candidates.filter(c =>
-      (c.passes || 0) < this.o.minPasses || c.sightings / c.passes >= this.o.minHitRate);
+    if (!this.o.legacy) {
+      this.candidates = this.candidates.filter(c =>
+        (c.passes || 0) < this.o.minPasses || c.sightings / c.passes >= this.o.minHitRate);
+    }
 
     this.candidates.sort((a, b) => a.t - b.t);
     const judged = this.candidates.filter(c => c.sightings >= this.o.sightings
                                             && c.travel !== null);
-    const accepted = this.gateActiveFor(judged.map(c => c.t))
+    // In legacy mode a repetition stays counted once it is counted: no re-judging, and
+    // therefore no withdrawal either.
+    const accepted = (!this.o.legacy && this.gateActiveFor(judged.map(c => c.t)))
       ? classifyByTravel(judged.map(c => c.travel), this.o.minRomFrac)
       : judged.map(() => true);
 
