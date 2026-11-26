@@ -26,29 +26,40 @@ timestamps relative to the first sample of that recording.
 |---|---|---|---|---|---|
 | 11-24 09:58 | 3 | 3 | 1.4 s | 8 s | — |
 | 11-24 10:26 | 4 | 4 | 2.0 s | 9 s | — |
-| 11-24 10:30 | 48 | 48 | 2.0 s | 102 s | Handy hochkant, hoch und run |
-| 11-24 10:32 | 4 | 4 | 2.0 s | 9 s | Handy hochkant, hoch und run |
-| 11-24 10:33 | 5 | 5 | 4.5 s | 22 s | Handy hochkant, hoch und run |
-| 11-26 16:36 | 22 | 22 | 2.5 s | 69 s | Handy hochkant, hoch und run |
-| 11-26 16:40 | 52 | 53 | 2.7 s | 189 s | Handy hochkant, hoch und run |
-| 11-26 17:24 | 54 | 54 | 2.3 s | 211 s | Handy hochkant, hoch und run |
-| 11-26 17:25 | 13 | **30** | 5.6 s | 72 s | Handy hochkant, hoch und run |
-| 11-26 17:26 | 25 | 25 | 2.4 s | 72 s | Handy hochkant, hoch und run |
+| 11-24 10:30 | 48 | 48 | 2.0 s | 102 s | Handy hochkant, hoch und r |
+| 11-24 10:32 | 4 | 4 | 2.0 s | 9 s | Handy hochkant, hoch und r |
+| 11-24 10:33 | 5 | 5 | 4.5 s | 22 s | Handy hochkant, hoch und r |
+| 11-26 16:36 | 22 | 22 | 2.5 s | 69 s | Handy hochkant, hoch und r |
+| 11-26 16:40 | 52 | 53 | 2.7 s | 189 s | Handy hochkant, hoch und r |
+| 11-26 17:24 | 54 | 54 | 2.3 s | 211 s | Handy hochkant, hoch und r |
+| 11-26 17:25 | 13 | **30** | 5.6 s | 72 s | Handy hochkant, hoch und r |
+| 11-26 17:26 | 25 | 25 | 2.4 s | 72 s | Handy hochkant, hoch und r |
 | 11-26 17:44 | 8 | **15** | 6.5 s | 50 s | Langsam und kurz |
 | 11-26 17:47 | 23 | **28** | 5.2 s | 123 s | Langsam und lang |
 | 11-26 17:49 | 13 | **50** | 8.0 s | 110 s | Sehr langsam und lang |
+| 11-26 17:56 | 14 | **21** | 0.0 s | 70 s | Sehr langsam und lang |
+| 11-26 18:09 | 5 | 5 | 2.5 s | 13 s | Sehr langsam und lang |
+| 11-26 18:10 | 15 | **11** | 3.5 s | 53 s | Sehr langsam und lang |
 
-Every failure is a slow set, and only a slow set. The three recorded last are
-deliberate: same tempo above and below the 60 s analysis window, to separate slowness
-from the window. Both break, so it is the tempo.
+The last three are on a weight stack, the rest hand-held. `18:10` has no cadence
+because its taps carry no timing — it was counted by hand afterwards.
 
-The mechanism, measured on the 8 s set: 47 peaks for 13 repetitions, median peak spacing
-1.85 s against a true cadence of 8.0 s, two to six peaks inside a single repetition. A
-slow repetition has a broad, flat velocity lobe, and the ripples on it clear a minimum
-spacing that sits at 0.6 s.
+Two separate failures, and both come from constants this project added rather than from
+the published method.
 
-What does survive on these recordings is the sign of the velocity: 27 zero crossings for
-13 repetitions, almost exactly two each. The ripples ride on one flank without crossing
-zero. Cadence read from zero crossings lands within 10 % on every failing set, while the
-peak count is out by two to four times -- which is what any fix here should be built on,
-not on the peaks it is trying to correct.
+**Slow repetitions split.** On the 8 s set the detector finds 47 peaks for 13
+repetitions, median peak spacing 1.85 s, two to six peaks inside one repetition. A slow
+repetition has a broad velocity lobe and the ripples on it clear a minimum spacing that
+sits at a fixed 0.6 s. Recorded above and below the 60 s analysis window at the same
+tempo: both break, so it is the tempo and not the window.
+
+**The idle guard closes on real sets.** It compares movement-band energy against
+residual energy, measured on acceleration — and slow movement has little acceleration by
+its nature. Its threshold is 0.5; the stack set at 18:10 measures 0.44 and is dropped
+entirely, while three further genuine sets sit at 0.57, 0.68 and 0.74. A rattling stack
+raises the denominator and pushes it further.
+
+Cadence read from zero crossings, which is within 10 % on every hand-held failure, does
+not survive the stack: 18:10 gives 2.5 crossings per repetition and 17:56 gives 4.0,
+against the 2.0 a clean reversal produces. Stack ring crosses zero. Any cadence estimate
+built on it has to be checked here first.
