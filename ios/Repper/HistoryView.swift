@@ -93,7 +93,9 @@ private struct SetRow: View {
 
             // Carried over from the series label when the set was recorded, editable
             // afterwards: a mislabelled recording is worse than an unlabelled one.
-            TextField("Wie bewegt? (z. B. Handy flach, Arm 90°)", text: $note, axis: .vertical)
+            TextField(record.isMeasurement ? "Wie bewegt? (z. B. Handy flach, Arm 90°)"
+                                           : "Welche Übung? (z. B. Lat Pulldown 60 kg)",
+                      text: $note, axis: .vertical)
                 .font(.caption)
                 .lineLimit(1...3)
                 .textFieldStyle(.plain)

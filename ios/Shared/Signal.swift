@@ -149,6 +149,18 @@ enum Signal {
         return kept.sorted()
     }
 
+    /// Topographic prominence of one peak: how far it rises above the higher of the
+    /// two valleys flanking it. The same measure `findPeaks` thresholds on, exposed
+    /// so a confirmed repetition can record how pronounced it actually was.
+    static func prominence(_ x: [Double], at i: Int) -> Double {
+        guard i > 0, i < x.count - 1 else { return 0 }
+        var l = x[i], r = x[i], j = i
+        while j > 0 && x[j] <= x[i] { j -= 1; l = Swift.min(l, x[j]) }
+        j = i
+        while j < x.count - 1 && x[j] <= x[i] { j += 1; r = Swift.min(r, x[j]) }
+        return x[i] - Swift.max(l, r)
+    }
+
     static func percentile(_ x: [Double], _ p: Double) -> Double {
         guard !x.isEmpty else { return 0 }
         let s = x.sorted()

@@ -51,7 +51,7 @@ struct ContentView: View {
                     .lineLimit(2)
             }
             stats
-            if session.isMeasuring { seriesStrip }
+            seriesStrip
             secondaryControls
             startButton
         }
@@ -61,14 +61,21 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showHistory) { HistoryView(store: session.store) }
         .sheet(isPresented: $showSettings) { SettingsView(session: session) }
-        .alert("Messreihe", isPresented: $showLabelEditor) {
-            TextField("z. B. Handy flach auf Stack, langsam", text: $labelDraft)
-            Button("Sichern") { session.seriesLabel = labelDraft }
-            Button("Leeren", role: .destructive) { session.seriesLabel = "" }
+        .alert(session.isMeasuring ? "Messreihe" : "Übung",
+               isPresented: $showLabelEditor) {
+            TextField(session.isMeasuring ? "z. B. Handy flach auf Stack, langsam"
+                                          : "z. B. Lat Pulldown 60 kg",
+                      text: $labelDraft)
+            Button("Sichern") { session.activeLabel = labelDraft }
+            Button("Leeren", role: .destructive) { session.activeLabel = "" }
             Button("Abbrechen", role: .cancel) { }
         } message: {
-            Text("Wird auf jeden Satz gestempelt, bis du sie änderst. "
-                 + "Beschreib, wie das Handy liegt und wie du dich bewegst.")
+            Text(session.isMeasuring
+                 ? "Wird auf jeden Satz gestempelt, bis du sie änderst. "
+                   + "Beschreib, wie das Handy liegt und wie du dich bewegst."
+                 : "Wird auf jeden Satz gestempelt, bis du sie änderst. "
+                   + "Übung und Gewicht reichen, um den Satz später dem Training "
+                   + "zuzuordnen.")
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { session.refreshWatchLink() }
@@ -186,8 +193,8 @@ struct ContentView: View {
         }
     }
 
-    /// Training counts and nothing else. Measurement adds the tap zones and the series
-    /// label, and marks the set as reference data in the history.
+    /// Training counts and nothing else. Measurement adds the tap zones and marks the
+    /// set as reference data in the history. Both modes carry a label.
     private var modePicker: some View {
         Picker("Modus", selection: $session.isMeasuring) {
             Text("Training").tag(false)
@@ -199,22 +206,28 @@ struct ContentView: View {
 
     /// What gets stamped onto the next recorded set. Sits above the Start button so it
     /// is read right before a set, which is the moment a stale label would do damage.
+    ///
+    /// In training it names the exercise, in measurement the series: in both cases it is
+    /// the one thing that lets a stored set be placed afterwards, and a set of squats is
+    /// no easier to recognise from its raw signal than a test run is.
     private var seriesStrip: some View {
         Button {
-            labelDraft = session.seriesLabel
+            labelDraft = session.activeLabel
             showLabelEditor = true
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: session.seriesLabel.isEmpty
+                Image(systemName: session.activeLabel.isEmpty
                       ? "tag" : "tag.fill")
                     .font(.caption2)
-                Text(session.seriesLabel.isEmpty ? "Messreihe benennen" : session.seriesLabel)
+                Text(session.activeLabel.isEmpty
+                     ? (session.isMeasuring ? "Messreihe benennen" : "Übung benennen")
+                     : session.activeLabel)
                     .font(.caption)
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 Image(systemName: "pencil").font(.caption2)
             }
-            .foregroundStyle(session.seriesLabel.isEmpty ? Color.secondary : Color.orange)
+            .foregroundStyle(session.activeLabel.isEmpty ? Color.secondary : Color.orange)
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity)

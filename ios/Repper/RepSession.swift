@@ -51,9 +51,9 @@ final class RepSession: ObservableObject {
         }
     }
 
-    /// Measurement mode shows the two tap zones and stamps the series label; training
-    /// mode is the plain counter. Sets are archived either way -- the history exists so a
-    /// mis-tap on Reset costs nothing, and that is true in both modes.
+    /// Measurement mode shows the two tap zones; training mode is the plain counter.
+    /// Sets are archived either way -- the history exists so a mis-tap on Reset costs
+    /// nothing, and that is true in both modes. So is the label.
     @Published var isMeasuring: Bool {
         didSet { UserDefaults.standard.set(isMeasuring, forKey: Self.measureKey) }
     }
@@ -63,6 +63,22 @@ final class RepSession: ObservableObject {
     /// sets does not have to be labelled twenty times. Survives a restart.
     @Published var seriesLabel: String {
         didSet { UserDefaults.standard.set(seriesLabel, forKey: Self.labelKey) }
+    }
+
+    /// The same thing for training: which exercise, what weight. Kept apart from
+    /// `seriesLabel` because the two describe different things and the mode switch is
+    /// one tap -- a shared field would stamp "Handy flach auf Stack" onto an evening of
+    /// squats, and a wrong label is worse than none.
+    @Published var exerciseLabel: String {
+        didSet { UserDefaults.standard.set(exerciseLabel, forKey: Self.exerciseKey) }
+    }
+
+    /// Whichever of the two the current mode writes and stamps.
+    var activeLabel: String {
+        get { isMeasuring ? seriesLabel : exerciseLabel }
+        set {
+            if isMeasuring { seriesLabel = newValue } else { exerciseLabel = newValue }
+        }
     }
 
     /// Seconds between tapping Start and the first sample, like a camera self-timer:
@@ -75,6 +91,7 @@ final class RepSession: ObservableObject {
 
     private static let delayKey = "startDelaySeconds"
     private static let labelKey = "seriesLabel"
+    private static let exerciseKey = "exerciseLabel"
     private static let measureKey = "isMeasuring"
     private static let vibrateKey = "vibrateOnRep"
     private static let speakKey = "speakCount"
@@ -111,6 +128,7 @@ final class RepSession: ObservableObject {
     init() {
         startDelay = UserDefaults.standard.integer(forKey: Self.delayKey)
         seriesLabel = UserDefaults.standard.string(forKey: Self.labelKey) ?? ""
+        exerciseLabel = UserDefaults.standard.string(forKey: Self.exerciseKey) ?? ""
         isMeasuring = UserDefaults.standard.bool(forKey: Self.measureKey)
         // Absent means first launch, where the tap should be on.
         vibrateOnRep = UserDefaults.standard.object(forKey: Self.vibrateKey) as? Bool ?? true
@@ -418,7 +436,7 @@ final class RepSession: ObservableObject {
             medianCon: medianCon,
             medianEcc: medianEcc,
             trueReps: manualMarks.isEmpty ? nil : manualMarks.count,
-            note: (isMeasuring && !seriesLabel.isEmpty) ? seriesLabel : nil,
+            note: activeLabel.isEmpty ? nil : activeLabel,
             rawFile: name,
             manualMarks: manualMarks.map { ($0 * 1000).rounded() / 1000 },
             manualBottoms: manualBottoms.map { ($0 * 1000).rounded() / 1000 },

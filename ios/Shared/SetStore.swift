@@ -103,6 +103,21 @@ final class SetStore: ObservableObject {
         save()
     }
 
+    /// Wipes the whole history in one go. A data-collection session leaves dozens of
+    /// sets behind, and swiping them away one row at a time is its own small chore.
+    /// Clearing the directory rather than just the records also takes the
+    /// `summary_*.json` files that single-set exports leave lying around.
+    func deleteAll() {
+        let fm = FileManager.default
+        let contents = (try? fm.contentsOfDirectory(at: dir,
+                                                    includingPropertiesForKeys: nil)) ?? []
+        for file in contents where file != indexURL {
+            try? fm.removeItem(at: file)
+        }
+        records.removeAll()
+        save()
+    }
+
     /// Raw CSV plus a summary of every variant, ready to hand to the analysis scripts.
     func exportURLs(for record: SetRecord) -> [URL] {
         var urls = [rawURL(for: record)]
