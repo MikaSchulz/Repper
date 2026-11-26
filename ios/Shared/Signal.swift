@@ -149,6 +149,67 @@ enum Signal {
         return kept.sorted()
     }
 
+    /// Median of each value's own neighbourhood, so the yardstick follows the set.
+    ///
+    /// Effort is not constant across a long set: on a 189 s recording the travel of a
+    /// genuine repetition ranges from 0.1 to over 0.9. One median over all of it puts
+    /// the bar above the weaker half and they are dropped.
+    static func localMedian(_ x: [Double], window: Int) -> [Double] {
+        let n = x.count
+        if n == 0 { return x }
+        if window <= 1 || window >= n {
+            return [Double](repeating: median(x), count: n)
+        }
+        let half = window / 2
+        return (0..<n).map { i in
+            median(Array(x[Swift.max(0, i - half)..<Swift.min(n, i + half + 1)]))
+        }
+    }
+
+    /// Split the velocity into concentric lobes: the peak inside each one, how far the
+    /// load travelled over it, and whether the window cut it off.
+    ///
+    /// A repetition is one positive lobe bounded by zero crossings — the concentric
+    /// phase, read off the same crossings the contraction phases are. Counting the lobe
+    /// rather than the peaks inside it is what makes slow repetitions work: a slow lobe
+    /// is broad and flat, and the ripples riding on it clear any fixed minimum spacing
+    /// several times over while never crossing zero themselves. On real 8 s repetitions
+    /// the peak detector returned 47 peaks for 13 repetitions.
+    static func positiveLobes(_ v: [Double], fs: Double)
+        -> (peaks: [Int], travel: [Double], atEdge: [Bool]) {
+        guard v.count > 3 else { return ([], [], []) }
+        var starts: [Int] = []
+        var ends: [Int] = []
+        for i in 1..<v.count {
+            if v[i] > 0 && v[i - 1] <= 0 { starts.append(i) }
+            if v[i] <= 0 && v[i - 1] > 0 { ends.append(i) }
+        }
+        // A window that already starts inside a concentric phase has no rising crossing
+        // before it, and one that stops inside one has no falling crossing after it.
+        if v[0] > 0 { starts.insert(0, at: 0) }
+        if v[v.count - 1] > 0 { ends.append(v.count) }
+        guard !starts.isEmpty, !ends.isEmpty else { return ([], [], []) }
+        if ends[0] < starts[0] { ends.removeFirst() }
+
+        var peaks: [Int] = []
+        var travel: [Double] = []
+        var atEdge: [Bool] = []
+        for k in 0..<Swift.min(starts.count, ends.count) {
+            let a = starts[k], b = ends[k]
+            if b - a < 3 { continue }
+            var best = a
+            var sum = 0.0
+            for i in a..<b {
+                if v[i] > v[best] { best = i }
+                sum += v[i]
+            }
+            peaks.append(best)
+            travel.append(sum / fs)
+            atEdge.append(a == 0 || b >= v.count)
+        }
+        return (peaks, travel, atEdge)
+    }
+
     /// Topographic prominence of one peak: how far it rises above the higher of the
     /// two valleys flanking it. The same measure `findPeaks` thresholds on, exposed
     /// so a confirmed repetition can record how pronounced it actually was.

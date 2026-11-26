@@ -19,6 +19,10 @@ export const DEFAULTS = {
   sightings: 2,       // a peak must survive this many consecutive analyses
   minWindowS: 4.0,    // do not judge a window shorter than this
   minVelocity: 0.02,  // p90(|v|) below this [m/s]: nothing is moving
+  travelFrac: 0.30,   // a lobe counts at this fraction of its neighbours' travel
+  edgeFrac: 0.70,     // a lobe cut off by the window edge has to show more
+  travelWindow: 9,    // how many neighbouring lobes set the yardstick
+  minFullLobes: 2,    // complete lobes needed before anything is committed
 };
 
 export function hampel(x, win) {
@@ -179,9 +183,10 @@ export function analyseWindow(samples, opt = {}) {
   const snr = std(band) / (std(resid) || 1e-9);   // reported only, for diagnostics
   const quiet = scale < o.minVelocity || (tg[tg.length - 1] - tg[0]) < o.minWindowS;
 
-  const peaks = quiet ? [] : findPeaks(vel, Math.round(o.minRepS * o.fs), o.promFrac * scale);
+  const lobeInfo = {fullLobes: 0};
+  const peaks = quiet ? [] : countLobes(vel, o, lobeInfo);
 
-  return {tg, acc, vel, peaks, rate, snr, quiet};
+  return {tg, acc, vel, peaks, rate, snr, quiet, fullLobes: lobeInfo.fullLobes};
 }
 
 /** Streaming counter.
@@ -191,6 +196,66 @@ export function analyseWindow(samples, opt = {}) {
  *  the stack into the starting position looks like a repetition until two real ones have
  *  set the scale, and then it disappears from both the number and the curve.
  */
+/** Median of each lobe's own neighbourhood: effort is not constant across a set. */
+function localMedian(x, window) {
+  const n = x.length;
+  if (n === 0) return x;
+  const half = window >> 1;
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const seg = x.slice(Math.max(0, i - half), Math.min(n, i + half + 1)).sort((a, b) => a - b);
+    out[i] = seg[seg.length >> 1];
+  }
+  return out;
+}
+
+/** One repetition per positive velocity lobe that actually moves the load.
+ *
+ *  A repetition is the concentric phase, bounded by the zero crossings around it —
+ *  the same crossings the contraction phases are read off. Counting the lobe rather
+ *  than the peaks inside it is what makes slow repetitions work: a slow lobe is broad
+ *  and flat, and the ripples riding on it clear any fixed minimum spacing several
+ *  times over, while never crossing zero themselves.
+ *
+ *  A lobe's integral is how far the load travelled, which is what tells a real
+ *  concentric phase from a stack ringing after the weight lands.
+ */
+function countLobes(v, o, out) {
+  const starts = [], ends = [];
+  for (let i = 1; i < v.length; i++) {
+    if (v[i] > 0 && v[i - 1] <= 0) starts.push(i);
+    if (v[i] <= 0 && v[i - 1] > 0) ends.push(i);
+  }
+  if (v[0] > 0) starts.unshift(0);
+  if (v[v.length - 1] > 0) ends.push(v.length);
+  if (!starts.length || !ends.length) return [];
+  if (ends[0] < starts[0]) ends.shift();
+
+  const peaks = [], travel = [], atEdge = [];
+  const n = Math.min(starts.length, ends.length);
+  for (let k = 0; k < n; k++) {
+    const a = starts[k], b = ends[k];
+    if (b - a < 3) continue;
+    let best = a, sum = 0;
+    for (let i = a; i < b; i++) {
+      if (v[i] > v[best]) best = i;
+      sum += v[i];
+    }
+    peaks.push(best);
+    travel.push(sum / o.fs);
+    atEdge.push(a === 0 || b >= v.length);
+  }
+  if (out) out.fullLobes = atEdge.filter(e => !e).length;
+  if (!peaks.length) return [];
+  const ref = localMedian(travel, o.travelWindow);
+  const keep = [];
+  for (let k = 0; k < peaks.length; k++) {
+    const need = (atEdge[k] ? o.edgeFrac : o.travelFrac) * ref[k];
+    if (travel[k] >= need) keep.push(peaks[k]);
+  }
+  return keep;
+}
+
 export class RepCounter {
   constructor(opt = {}) {
     this.o = {...DEFAULTS, ...opt};
@@ -236,6 +301,12 @@ export class RepCounter {
     const r = analyseWindow(win, this.o);
     this.last = r;
     if (!r) return null;
+
+    // A lobe is judged against the travel of its neighbours, and a window at the start
+    // of a set holds mostly lobes its own edges cut off — with no complete ones to
+    // compare against, anything passes, and the frontier never takes a commit back. On
+    // a slow set that put two phantom repetitions into the first seven seconds.
+    if (r.fullLobes < this.o.minFullLobes) return r;
 
     // Bootstrap: the cadence is unknown, and a detrend over roughly one repetition can
     // split that repetition in two. Commit nothing until the window covers at least

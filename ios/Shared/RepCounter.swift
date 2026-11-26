@@ -5,7 +5,10 @@ struct RepConfig: Equatable {
     var fs = 100.0              // resampling grid [Hz]
     var windowS = 60.0          // trailing analysis window [s]; must span several reps
     var minRepS = 0.6           // minimum distance between repetitions
-    var promFrac = 0.30         // peak prominence as fraction of p90(|v|)
+    var travelFrac = 0.30       // a lobe counts at this fraction of its neighbours' travel
+    var edgeFrac = 0.70         // a lobe cut off by the window edge has to show more
+    var travelWindow = 9        // how many neighbouring lobes set the yardstick
+    var minFullLobes = 2        // complete lobes needed before anything is committed
     var smoothS = 0.25
     var hampelS = 0.10
     var detrendOrder = 2
@@ -25,6 +28,7 @@ struct Analysis {
     var rate: Double            // measured input sampling rate [Hz]
     var snr: Double
     var quiet: Bool
+    var fullLobes: Int          // lobes the window did not cut off
 }
 
 /// One sample of specific force (acceleration INCLUDING gravity), in m/s^2.
@@ -99,6 +103,13 @@ final class RepCounter {
 
         guard let r = Self.analyse(win, cfg: cfg) else { return nil }
         last = r
+
+        // A lobe is judged against the travel of its neighbours, and a window at the
+        // start of a set holds mostly lobes its own edges cut off -- with no complete
+        // ones to compare against, anything passes, and the frontier never takes a
+        // commit back. On a slow set that put two phantom repetitions into the first
+        // seven seconds.
+        if r.fullLobes < cfg.minFullLobes { return r }
 
         // Bootstrap: the cadence is unknown, and a detrend over roughly one repetition
         // can split that repetition in two. Commit nothing until the window covers at
@@ -213,11 +224,21 @@ final class RepCounter {
         let residSd = Signal.std(resid)
         let snr = residSd > 0 ? Signal.std(band) / residSd : .infinity   // diagnostics only
 
-        let peaks = quiet ? [] : Signal.findPeaks(vel,
-                                                  minDistance: Int((cfg.minRepS * cfg.fs).rounded()),
-                                                  minProminence: cfg.promFrac * scale)
+        var peaks: [Int] = []
+        var fullLobes = 0
+        if !quiet {
+            let lobes = Signal.positiveLobes(vel, fs: cfg.fs)
+            fullLobes = lobes.atEdge.filter { !$0 }.count
+            let reference = Signal.localMedian(lobes.travel, window: cfg.travelWindow)
+            for k in 0..<lobes.peaks.count {
+                // A lobe cut off by the end of the window shows only part of its
+                // travel, so the same bar would let a sliver through.
+                let need = (lobes.atEdge[k] ? cfg.edgeFrac : cfg.travelFrac) * reference[k]
+                if lobes.travel[k] >= need { peaks.append(lobes.peaks[k]) }
+            }
+        }
 
         return Analysis(t: tg, acc: acc, vel: vel, peaks: peaks, rate: rate, snr: snr,
-                        quiet: quiet)
+                        quiet: quiet, fullLobes: fullLobes)
     }
 }

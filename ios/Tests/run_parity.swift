@@ -9,6 +9,7 @@ import Foundation
 struct Expected: Decodable {
     let true_reps: Int
     let python_reps: Int
+    let streaming_reps: Int
     let record_hz: Double
 }
 
@@ -49,7 +50,7 @@ struct Parity {
             // Measured against the Python run, not against the truth: on the two sets
             // built from partial repetitions this detector counts the extra movements,
             // and every implementation has to do so identically.
-            let ok = counter.count == exp.python_reps
+            let ok = counter.count == exp.streaming_reps
             if !ok { failures += 1 }
             var line = "\(ok ? "PASS" : "FAIL")  \(name.padding(toLength: 18, withPad: " ", startingAt: 0))"
             line += "swift=\(counter.count) python=\(exp.python_reps) truth=\(exp.true_reps)"

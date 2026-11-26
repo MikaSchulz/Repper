@@ -192,7 +192,7 @@ def find_peaks(x: np.ndarray, min_distance: int = 1, min_prominence: float = 0.0
     """Return (indices, prominences), highest-first greedy distance filtering."""
     peaks = _local_maxima(np.asarray(x, dtype=float))
     if len(peaks) == 0:
-        return np.array([], dtype=int), np.array([])
+        return np.array([], dtype=int), np.array([]), np.array([], dtype=bool)
     prom = _prominences(x, peaks)
     keep_mask = prom >= min_prominence
     peaks, prom = peaks[keep_mask], prom[keep_mask]
@@ -206,6 +206,80 @@ def find_peaks(x: np.ndarray, min_distance: int = 1, min_prominence: float = 0.0
             kept.append(idx)
     kept = np.array(sorted(kept, key=lambda k: peaks[k]), dtype=int)
     return peaks[kept], prom[kept]
+
+
+# --------------------------------------------------------------------------
+# Step 8b: repetitions as velocity lobes
+# --------------------------------------------------------------------------
+
+def _local_median(x: np.ndarray, window: int) -> np.ndarray:
+    """Median of each value's own neighbourhood, so the yardstick follows the set.
+
+    Effort is not constant across a long set: on a 189 s recording the travel of a
+    genuine repetition ranges from 0.1 to over 0.9. One median over all of it puts the
+    threshold above the weaker half, and they are dropped. Over a window of a few
+    neighbouring repetitions it tracks fatigue instead of being dominated by whatever
+    the strongest stretch did.
+    """
+    n = len(x)
+    if n == 0:
+        return x
+    if window <= 1 or window >= n:
+        return np.full(n, float(np.median(x)))
+    half = window // 2
+    out = np.empty(n)
+    for i in range(n):
+        a, b = max(0, i - half), min(n, i + half + 1)
+        out[i] = float(np.median(x[a:b]))
+    return out
+
+
+def positive_lobes(v: np.ndarray, fs: float):
+    """Split the velocity into concentric lobes: (peak index, travel) per lobe.
+
+    A repetition is one positive lobe bounded by zero crossings — the concentric
+    phase — which is the model the published method already works in, since it reads
+    the contraction phases off the same crossings. Counting the lobe rather than the
+    peaks inside it matters for slow repetitions: a slow lobe is broad and flat, and
+    the ripples riding on it clear any fixed minimum spacing several times over. On
+    real 8 s repetitions the peak detector returns 47 peaks for 13 repetitions, with
+    median spacing 1.85 s against a true cadence of 8.0 s. Those ripples never cross
+    zero, so the lobe survives them.
+
+    A lobe touching either end of the window is reported as such: only part of it is
+    visible, so its travel is an underestimate and it needs judging differently.
+
+    `travel` is the lobe's integral: how far the load actually moved. A stack ringing
+    after the weight lands produces lobes with almost no travel, and a repetition that
+    only goes half way produces a short one.
+    """
+    pos = (v > 0).astype(np.int8)
+    edge = np.diff(pos)
+    idx = np.flatnonzero(edge)
+    starts = idx[edge[idx] > 0] + 1
+    ends = idx[edge[idx] < 0] + 1
+    # A recording that already starts inside a concentric phase has no rising crossing
+    # before it, and one that stops inside one has no falling crossing after it. Both
+    # are repetitions; without this the first or last of a set is silently lost, which
+    # cost exactly one repetition on eight of the synthetic machines.
+    edge_lobe = []
+    if pos[0]:
+        starts = np.concatenate([[0], starts])
+    if pos[-1]:
+        ends = np.concatenate([ends, [len(v)]])
+    if len(starts) == 0 or len(ends) == 0:
+        return np.array([], dtype=int), np.array([]), np.array([], dtype=bool)
+    if ends[0] < starts[0]:
+        ends = ends[1:]
+    n = min(len(starts), len(ends))
+    peaks, travel = [], []
+    for a, b in zip(starts[:n], ends[:n]):
+        if b - a < 3:
+            continue
+        peaks.append(a + int(np.argmax(v[a:b])))
+        travel.append(float(np.trapezoid(v[a:b], dx=1.0 / fs)))
+        edge_lobe.append(a == 0 or b >= len(v))
+    return np.array(peaks, dtype=int), np.array(travel), np.array(edge_lobe)
 
 
 # --------------------------------------------------------------------------
@@ -263,7 +337,9 @@ def detect_reps(
     az,
     fs: float = 100.0,
     min_rep_s: float = 0.6,
-    prominence_frac: float = 0.30,
+    travel_frac: float = 0.30,
+    travel_window: int = 9,
+    edge_frac: float = 0.70,
     smooth_s: float = 0.25,
     hampel_s: float = 0.10,
     baseline_s: float | None = None,
@@ -332,11 +408,17 @@ def detect_reps(
     if scale < min_velocity:
         peaks, prom = np.array([], dtype=int), np.array([])
     else:
-        peaks, prom = find_peaks(
-            v,
-            min_distance=max(1, int(round(min_rep_s * fs))),
-            min_prominence=prominence_frac * scale,
-        )
+        peaks, travel, at_edge = positive_lobes(v, fs)
+        if len(peaks):
+            ref = _local_median(travel, travel_window)
+            # A lobe cut off by the end of the window shows only part of its travel, so
+            # the same bar would let a sliver through. It has to look like a whole
+            # repetition on what little is visible.
+            need = np.where(at_edge, edge_frac, travel_frac) * ref
+            keep = travel >= need
+            peaks, prom = peaks[keep], travel[keep]
+        else:
+            prom = travel
 
     det = RepDetection(fs=fs, t=tt, accel=accel, velocity=v, peaks=peaks,
                        prominences=prom, snr=snr, detrend_order=order)
