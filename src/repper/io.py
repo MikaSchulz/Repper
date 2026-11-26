@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import gzip
 import json
 from pathlib import Path
 
@@ -24,9 +25,15 @@ def _pick(header: list[str], key: str) -> int:
     raise KeyError(f"no column for {key!r} in {header}")
 
 
+def _open_text(path: str | Path):
+    """Plain or gzipped, decided by the suffix: a 189 s set is 536 KB raw, 188 KB gzipped."""
+    p = Path(path)
+    return gzip.open(p, "rt", newline="") if p.suffix.lower() == ".gz" else open(p, newline="")
+
+
 def load_csv(path: str | Path):
     """CSV with a header row. Timestamps in seconds, or milliseconds (auto-detected)."""
-    with open(path, newline="") as fh:
+    with _open_text(path) as fh:
         rows = list(csv.reader(fh))
     header, body = rows[0], rows[1:]
     ci = {k: _pick(header, k) for k in _ALIASES}
@@ -36,7 +43,8 @@ def load_csv(path: str | Path):
 
 def load_json(path: str | Path):
     """JSON as written by the web prototype: {"samples": [[t, x, y, z], ...]}."""
-    data = json.loads(Path(path).read_text())
+    with _open_text(path) as fh:
+        data = json.loads(fh.read())
     samples = data["samples"] if isinstance(data, dict) else data
     return _normalize(np.asarray(samples, dtype=float))
 
@@ -52,4 +60,5 @@ def _normalize(arr: np.ndarray):
 
 def load(path: str | Path):
     p = Path(path)
-    return load_json(p) if p.suffix.lower() == ".json" else load_csv(p)
+    inner = Path(p.stem) if p.suffix.lower() == ".gz" else p
+    return load_json(p) if inner.suffix.lower() == ".json" else load_csv(p)

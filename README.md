@@ -142,13 +142,15 @@ python3 -m repper.cli recordings/legpress_set1.csv --fs 60 --verbose
 ```
 src/repper/pipeline.py   9-stufige Pipeline, reines numpy
 src/repper/synth.py      synthetische Sätze mit Ground Truth
-src/repper/io.py         CSV/JSON-Aufnahmen laden
+src/repper/io.py         CSV/JSON-Aufnahmen laden, auch .gz
 src/repper/cli.py        python3 -m repper.cli <datei>
 web/pipeline.js          JS-Port + RepCounter (Streaming)
 web/index.html           Live-Zähler, Plots, CSV-Export
 scripts/                 fetch_reference, reference_stats, validate_synthetic,
-                         make_fixtures, serve
+                         make_fixtures, evaluate_exports, serve
 test/                    Python-Tests, JS-Paritätstest, Fixtures
+test/real/               eine echte Aufnahme mit Handzählung (189 s, 52 Wdh.),
+                         gzippt; der Satz, der die Längenabhängigkeit gefunden hat
 ```
 
 Pipeline: Vektorlänge → Hampel → Zeitstempel bereinigen und äquidistant interpolieren →

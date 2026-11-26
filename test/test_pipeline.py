@@ -20,6 +20,7 @@ from repper.pipeline import (GRAVITY, auto_detrend_order,       # noqa: E402
 from repper.synth import make_set                              # noqa: E402
 
 FIX = ROOT / "test" / "fixtures"
+REAL = ROOT / "test" / "real"
 
 
 class TestBuildingBlocks(unittest.TestCase):
@@ -140,6 +141,51 @@ class TestDriftOverLongSets(unittest.TestCase):
         det = detect_reps(s.t, s.ax, s.ay, az)
         self.assertGreaterEqual(det.detrend_order, 4)
         self.assertEqual(det.count, s.count)
+
+
+class TestRealRecording(unittest.TestCase):
+    """The set that found the drift problem, kept as a recording rather than a story.
+
+    189 s, 52 repetitions, cadence from 1.75 s to 12.25 s, counted by hand during the set
+    (`true_times` are the taps). Quantized to 3 decimals and gzipped to keep it at 187 KB;
+    the count is unchanged by that, and `TestDriftOverLongSets` covers the mechanism
+    synthetically if this file ever has to go.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.expected = json.loads((REAL / "expected.json").read_text())
+
+    def test_counts_match_what_was_tapped_in(self):
+        for name, exp in self.expected.items():
+            with self.subTest(name):
+                t, x, y, z = load(REAL / f"{name}.csv.gz")
+                det = detect_reps(t, x, y, z)
+                self.assertEqual(det.detrend_order, exp["python_detrend_order"])
+                self.assertEqual(det.count, exp["true_reps"])
+
+    def test_order_two_still_loses_the_last_third(self):
+        """The regression itself: pin the old default and the set comes up short."""
+        for name, exp in self.expected.items():
+            with self.subTest(name):
+                t, x, y, z = load(REAL / f"{name}.csv.gz")
+                det = detect_reps(t, x, y, z, detrend_order=2)
+                self.assertEqual(det.count, exp["python_reps_order2"])
+                self.assertLess(det.count, exp["true_reps"])
+
+    def test_repetitions_land_near_the_taps(self):
+        """A right total can still be a miss plus an invention; match them in time."""
+        for name, exp in self.expected.items():
+            with self.subTest(name):
+                t, x, y, z = load(REAL / f"{name}.csv.gz")
+                found = list(detect_reps(t, x, y, z).rep_times)
+                taps = exp["true_times"]
+                # the detector marks the velocity peak, the tap lands where the lifter
+                # felt the repetition, and this set runs up to 12 s per repetition.
+                # 48 of 52 match at 2.5 s (44 at 1.5 s), so the bar leaves two to spare.
+                matched = sum(1 for tap in taps
+                              if any(abs(f - tap) < 2.5 for f in found))
+                self.assertGreaterEqual(matched, int(0.9 * len(taps)))
 
 
 class TestTempoRobustness(unittest.TestCase):
