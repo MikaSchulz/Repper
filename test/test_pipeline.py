@@ -82,10 +82,25 @@ class TestFixtures(unittest.TestCase):
                 self.assertEqual(detect_reps(t, x, y, z).count, exp["python_reps"])
 
     def test_idle_recording_counts_nothing(self):
+        """A real phone, left untouched on a weight stack for 102 s."""
         t, x, y, z = load(FIX / "idle_phone.csv")
         det = detect_reps(t, x, y, z)
         self.assertEqual(det.count, 0)
-        self.assertLess(det.snr, 0.5)
+        # The guard is the velocity scale, and the margin is wide: this recording
+        # reaches 0.005 m/s where the slowest real set reaches 0.083.
+        self.assertLess(np.percentile(np.abs(det.velocity), 90), 0.02)
+
+    def test_acceleration_snr_does_not_separate_idle_from_movement(self):
+        """Why the idle guard is not measured on acceleration.
+
+        The guard used to be the ratio of movement-band energy to residual energy.
+        Slow movement has little acceleration by its nature, so that ratio runs the
+        wrong way round on the two cases it exists to tell apart: this motionless
+        recording scores higher than a genuine set on a weight stack did. Written
+        down because the measure looks reasonable and reads plausibly in code.
+        """
+        t, x, y, z = load(FIX / "idle_phone.csv")
+        self.assertGreater(detect_reps(t, x, y, z).snr, 0.5)
 
 
 class TestKnownLimits(unittest.TestCase):

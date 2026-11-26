@@ -12,7 +12,7 @@ struct RepConfig: Equatable {
     var confirmLagS = 0.35      // a peak is only counted once this much newer data exists
     var sightings = 2           // a peak must survive this many consecutive analyses
     var minWindowS = 4.0        // do not judge a window shorter than this
-    var minSnr = 0.5            // movement band vs. sensor noise; below this: idle
+    var minVelocity = 0.02      // p90(|v|) below this [m/s]: nothing is moving
 
     static let `default` = RepConfig()
 }
@@ -193,17 +193,26 @@ final class RepCounter {
         var vel = Signal.detrendPoly(Signal.integrate(acc, fs: cfg.fs), order: cfg.detrendOrder)
         vel = Signal.movingAverage(vel, window: Int((cfg.smoothS * cfg.fs).rounded()))
 
-        // Idle guard. The prominence threshold is relative to the window's own amplitude,
-        // so a window holding nothing but sensor noise would have that noise rescaled into
-        // "repetitions". Movement lives well below ~3 Hz, sensor noise does not.
+        // Idle guard. The prominence threshold is a fraction of the window's own
+        // amplitude, so a window holding nothing but sensor noise would have that noise
+        // rescaled into "repetitions". The scale is its own guard: a phone lying still
+        // integrates to a velocity that no real movement comes near.
+        //
+        // This used to compare movement-band energy against residual energy on
+        // acceleration. That measure is not merely tight here, it is backwards: slow
+        // movement has little acceleration by its nature, so a genuine set on a weight
+        // stack read 0.44 and was dropped, while a phone left untouched for 102 s read
+        // 0.66 and was let through to count 16 repetitions. Velocity separates those
+        // two by a factor of 18.
+        let scale = Signal.percentile(vel.map(abs), 0.9)
+        let quiet = scale < cfg.minVelocity || (tg[tg.count - 1] - tg[0]) < cfg.minWindowS
+
         let band = Signal.movingAverage(acc, window: Int((0.3 * cfg.fs).rounded()))
         var resid = [Double](repeating: 0, count: acc.count)
         for i in 0..<acc.count { resid[i] = acc[i] - band[i] }
         let residSd = Signal.std(resid)
-        let snr = residSd > 0 ? Signal.std(band) / residSd : .infinity
-        let quiet = snr < cfg.minSnr || (tg[tg.count - 1] - tg[0]) < cfg.minWindowS
+        let snr = residSd > 0 ? Signal.std(band) / residSd : .infinity   // diagnostics only
 
-        let scale = Signal.percentile(vel.map(abs), 0.9)
         let peaks = quiet ? [] : Signal.findPeaks(vel,
                                                   minDistance: Int((cfg.minRepS * cfg.fs).rounded()),
                                                   minProminence: cfg.promFrac * scale)

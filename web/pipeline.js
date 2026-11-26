@@ -18,7 +18,7 @@ export const DEFAULTS = {
   confirmLagS: 0.35,  // a peak is only counted once this much newer data exists
   sightings: 2,       // a peak must survive this many consecutive analyses
   minWindowS: 4.0,    // do not judge a window shorter than this
-  minSnr: 0.5,        // movement band vs. sensor noise; below this the window is idle
+  minVelocity: 0.02,  // p90(|v|) below this [m/s]: nothing is moving
 };
 
 export function hampel(x, win) {
@@ -164,15 +164,20 @@ export function analyseWindow(samples, opt = {}) {
   const abs = Float64Array.from(vel, Math.abs).sort();
   const scale = abs[Math.floor(0.9 * (abs.length - 1))];
 
-  // Idle-window guard. The prominence threshold is relative to the window's own
-  // amplitude, so a window holding nothing but sensor noise would have that
-  // noise rescaled into "repetitions". Movement lives well below ~3 Hz, sensor
-  // noise does not, so the ratio of the smoothed component to the residual
-  // separates the two independently of how slow or light the set is.
+  // Idle-window guard. The prominence threshold is a fraction of the window's own
+  // amplitude, so a window holding nothing but sensor noise would have that noise
+  // rescaled into "repetitions". The scale is its own guard: a phone lying still
+  // integrates to a velocity that no real movement comes near.
+  //
+  // This used to compare movement-band energy against residual energy on acceleration.
+  // That measure is not merely tight here, it is backwards: slow movement has little
+  // acceleration by its nature, so a genuine set on a weight stack read 0.44 and was
+  // dropped, while a phone left untouched for 102 s read 0.66 and was let through to
+  // count 16 repetitions. Velocity separates those two by a factor of 18.
   const band = movingAverage(acc, Math.round(0.3 * o.fs));
   const resid = acc.map((a, i) => a - band[i]);
-  const snr = std(band) / (std(resid) || 1e-9);
-  const quiet = snr < o.minSnr || (tg[tg.length - 1] - tg[0]) < o.minWindowS;
+  const snr = std(band) / (std(resid) || 1e-9);   // reported only, for diagnostics
+  const quiet = scale < o.minVelocity || (tg[tg.length - 1] - tg[0]) < o.minWindowS;
 
   const peaks = quiet ? [] : findPeaks(vel, Math.round(o.minRepS * o.fs), o.promFrac * scale);
 

@@ -226,7 +226,7 @@ def main() -> None:
         sweep(sets, {
             "prominence_frac": [0.20, 0.30, 0.40],
             "min_rep_s": [0.5, 0.6, 0.8],
-            "min_snr": [0.4, 0.5, 0.7],
+            "min_velocity": [0.01, 0.02, 0.04],
         })
 
 

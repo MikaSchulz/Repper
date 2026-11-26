@@ -1300,5 +1300,40 @@
   ],
   "sampleCount": 5278,
   "trueReps": 15
+ },
+ {
+  "count": 16,
+  "date": "2026-11-26T18:17:20Z",
+  "duration": 101.72347758332035,
+  "id": "AE518933-A53D-49AE-B649-3E3595129A28",
+  "kind": "stack",
+  "manualBottoms": [],
+  "manualMarks": [],
+  "measuredRate": 100.12565697721224,
+  "medianCon": 1.7999999999996419,
+  "medianEcc": 0.3600000000000563,
+  "note": "Still keine Bewegung",
+  "purpose": "measurement",
+  "rawFile": "set_20261126T181720.csv",
+  "repTimes": [
+   0.47,
+   1.44,
+   3.19,
+   5.26,
+   6.4,
+   7.25,
+   8.55,
+   10.34,
+   11.21,
+   12.42,
+   17.86,
+   22.4,
+   23.24,
+   24.21,
+   44.7,
+   56.66
+  ],
+  "sampleCount": 10186,
+  "trueReps": 0
  }
 ]

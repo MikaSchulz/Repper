@@ -268,7 +268,7 @@ def detect_reps(
     hampel_s: float = 0.10,
     baseline_s: float | None = None,
     detrend_order: int | None = None,
-    min_snr: float = 0.5,
+    min_velocity: float = 0.02,
     gravity_removed: bool = False,
 ) -> RepDetection:
     """Full pipeline: raw tri-axial acceleration -> repetition count and phases.
@@ -318,14 +318,24 @@ def detect_reps(
     resid = accel - band
     snr = float(band.std() / resid.std()) if resid.std() > 0 else np.inf
 
-    if snr < min_snr:
+    # Idle guard. The prominence threshold is a fraction of the window's own amplitude,
+    # so a window holding nothing but sensor noise would have that noise rescaled into
+    # "repetitions". The scale itself is the guard: a phone lying still integrates to a
+    # velocity that no real movement comes near.
+    #
+    # This used to compare movement-band energy against residual energy on acceleration.
+    # That measure is wrong here and not merely tight: slow movement has little
+    # acceleration by its nature, so on a real stack set it read 0.44 and dropped the
+    # set, while a phone lying untouched for 102 s read 0.66 and was let through to
+    # count 16 repetitions. Velocity separates the same two by a factor of 18.
+    scale = np.percentile(np.abs(v), 90)
+    if scale < min_velocity:
         peaks, prom = np.array([], dtype=int), np.array([])
     else:
-        scale = np.percentile(np.abs(v), 90)
         peaks, prom = find_peaks(
             v,
             min_distance=max(1, int(round(min_rep_s * fs))),
-            min_prominence=prominence_frac * scale if scale > 0 else 0.0,
+            min_prominence=prominence_frac * scale,
         )
 
     det = RepDetection(fs=fs, t=tt, accel=accel, velocity=v, peaks=peaks,
