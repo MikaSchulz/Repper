@@ -152,8 +152,9 @@ test/                    Python-Tests, JS-Paritätstest, Fixtures
 ```
 
 Pipeline: Vektorlänge → Hampel → Zeitstempel bereinigen und äquidistant interpolieren →
-Gravitationsoffset (Median) → einfach integrieren → Polynom-Detrend → Moving Average →
-Peak-Detection (Mindestabstand + Prominenz) → Phasen über Nulldurchgänge.
+Gravitationsoffset (Median) → einfach integrieren → Polynom-Detrend (Ordnung nach Länge) →
+Moving Average → Peak-Detection (Mindestabstand + Prominenz) → Phasen über
+Nulldurchgänge.
 
 Zwei Abweichungen vom Paper, beide empirisch begründet:
 
@@ -161,6 +162,14 @@ Zwei Abweichungen vom Paper, beide empirisch begründet:
   gleitende Basislinie ist ein Hochpass; mit 4-s-Fenster kostet sie bei 8-s-Wiederholungen
   37 % F-Score, weil das Ripple falsche Peaks erzeugt. Die Drift erledigt der Polynomfit
   in der Geschwindigkeitsdomäne.
+- **Detrend-Ordnung nach Aufnahmelänge** (`auto_detrend_order`, eine Ordnung je 30 s,
+  Minimum 2). Order 2 stammt vom Live-Zähler, der nie mehr als 60 s sieht; offline geht
+  ein ganzer Satz auf einmal hinein, und über drei Minuten folgt die Parabel der
+  Integrationsdrift nicht mehr — die Wiederholungen sitzen auf der Restschräge und
+  verlieren ihre Prominenz. Gemessen an einem 189-s-Satz mit 52 Wiederholungen: Order 2
+  zählt 49, dasselbe letzte Drittel allein gerechnet alle 10 seiner Tipps, Order 6 über
+  den ganzen Satz alle 52. Alles unter 60 s bleibt bei Order 2, damit Offline-Pipeline
+  und Live-Zähler auf jedem Fenster, das der Live-Zähler sieht, identisch rechnen.
 - **Ruhe-Gate**: Die Prominenzschwelle ist relativ zur Signalamplitude, also würde ein
   still liegendes Handy sein eigenes Rauschen zu "Wiederholungen" hochskalieren. Das
   Verhältnis von geglätteter Komponente zu Residuum trennt Bewegung von Rauschen

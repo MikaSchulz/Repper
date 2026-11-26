@@ -14,8 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from repper.io import load                                    # noqa: E402
-from repper.pipeline import (GRAVITY, detect_reps, find_peaks,  # noqa: E402
-                             hampel, magnitude, resample_uniform)
+from repper.pipeline import (GRAVITY, auto_detrend_order,       # noqa: E402
+                             detect_reps, find_peaks, hampel, magnitude,
+                             resample_uniform)
 from repper.synth import make_set                              # noqa: E402
 
 FIX = ROOT / "test" / "fixtures"
@@ -106,6 +107,39 @@ class TestKnownLimits(unittest.TestCase):
                      rng=np.random.default_rng(42))
         self.assertEqual(s.count, 10)
         self.assertEqual(detect_reps(s.t, s.ax, s.ay, s.az).count, 12)
+
+
+class TestDriftOverLongSets(unittest.TestCase):
+    """A whole set goes into the offline pipeline at once; the live counter sees 60 s.
+
+    Found on a real 189 s set with 52 repetitions: order 2 counted 49, because over three
+    minutes the parabola cannot follow the integration drift and the repetitions in the
+    last third lose their prominence to the residual slope. The same last third, run
+    alone, counted all of its repetitions.
+    """
+
+    def test_order_follows_the_length_of_the_recording(self):
+        self.assertEqual(auto_detrend_order(8.0), 2)        # short set: as before
+        self.assertEqual(auto_detrend_order(59.0), 2)       # live counter's window
+        self.assertEqual(auto_detrend_order(60.0), 2)
+        self.assertEqual(auto_detrend_order(102.0), 3)
+        self.assertEqual(auto_detrend_order(189.0), 6)      # the set that found this
+        self.assertEqual(auto_detrend_order(3600.0), 8)     # capped
+
+    def test_pinned_order_is_honoured_and_reported(self):
+        s = make_set(machine="LEG PRESS", reps=6, rng=np.random.default_rng(1))
+        self.assertEqual(detect_reps(s.t, s.ax, s.ay, s.az, detrend_order=5).detrend_order, 5)
+        self.assertEqual(detect_reps(s.t, s.ax, s.ay, s.az).detrend_order, 2)
+
+    def test_long_set_with_tilt_drift_still_counts(self):
+        """Phone tilting slowly over the set: a baseline the order-2 fit cannot absorb."""
+        s = make_set(machine="LEG PRESS", reps=40, rng=np.random.default_rng(7))
+        drift = 0.8 * np.sin(2 * np.pi * np.asarray(s.t) / (2.2 * s.t[-1]))
+        az = np.asarray(s.az) + drift
+        self.assertGreater(s.t[-1], 120.0)                  # long enough for order >= 4
+        det = detect_reps(s.t, s.ax, s.ay, az)
+        self.assertGreaterEqual(det.detrend_order, 4)
+        self.assertEqual(det.count, s.count)
 
 
 class TestTempoRobustness(unittest.TestCase):
