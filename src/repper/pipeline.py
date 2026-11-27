@@ -212,28 +212,6 @@ def find_peaks(x: np.ndarray, min_distance: int = 1, min_prominence: float = 0.0
 # Step 8b: repetitions as velocity lobes
 # --------------------------------------------------------------------------
 
-def _local_median(x: np.ndarray, window: int) -> np.ndarray:
-    """Median of each value's own neighbourhood, so the yardstick follows the set.
-
-    Effort is not constant across a long set: on a 189 s recording the travel of a
-    genuine repetition ranges from 0.1 to over 0.9. One median over all of it puts the
-    threshold above the weaker half, and they are dropped. Over a window of a few
-    neighbouring repetitions it tracks fatigue instead of being dominated by whatever
-    the strongest stretch did.
-    """
-    n = len(x)
-    if n == 0:
-        return x
-    if window <= 1 or window >= n:
-        return np.full(n, float(np.median(x)))
-    half = window // 2
-    out = np.empty(n)
-    for i in range(n):
-        a, b = max(0, i - half), min(n, i + half + 1)
-        out[i] = float(np.median(x[a:b]))
-    return out
-
-
 def recentre(v: np.ndarray, fs: float, span_s: float) -> np.ndarray:
     """Put the zero line where the movement actually is, locally.
 
@@ -241,7 +219,7 @@ def recentre(v: np.ndarray, fs: float, span_s: float) -> np.ndarray:
     ends. The polynomial detrend removes drift over the whole window, which leaves a
     residual offset that wanders: where it sits above zero, consecutive repetitions
     never dip below the line and merge into one lobe. On a 149 s set of 70 fast
-    repetitions that cost 27 of them — 54 lobes for 70 repetitions.
+    repetitions that cost 27 of them -- 54 lobes for 70 repetitions.
 
     Subtracting a slow moving average fixes the line without touching the shape at the
     scale of a repetition: 20 s is an order of magnitude above the fastest cadence and
@@ -266,7 +244,12 @@ def positive_lobes(v: np.ndarray, fs: float):
     zero, so the lobe survives them.
 
     A lobe touching either end of the window is reported as such: only part of it is
-    visible, so its travel is an underestimate and it needs judging differently.
+    visible, so nothing about it can be proved -- which is what the merging step needs
+    to know. Nothing judges it differently when counting any more. A higher bar for cut
+    lobes, a median taken over a lobe's neighbours rather than all of them, and a
+    minimum number of whole lobes were each measured against 38 real recordings and each
+    cost exactly nothing; removed together they left 22 errors where all three present
+    gave 23.
 
     `travel` is the lobe's integral: how far the load actually moved. A stack ringing
     after the weight lands produces lobes with almost no travel, and a repetition that
@@ -357,9 +340,7 @@ def detect_reps(
     fs: float = 100.0,
     min_rep_s: float = 0.6,
     travel_frac: float = 0.30,
-    travel_window: int = 9,
     baseline_span_s: float = 20.0,
-    edge_frac: float = 0.70,
     smooth_s: float = 0.25,
     hampel_s: float = 0.10,
     baseline_s: float | None = None,
@@ -428,14 +409,9 @@ def detect_reps(
     if scale < min_velocity:
         peaks, prom = np.array([], dtype=int), np.array([])
     else:
-        peaks, travel, at_edge = positive_lobes(recentre(v, fs, baseline_span_s), fs)
+        peaks, travel, _ = positive_lobes(recentre(v, fs, baseline_span_s), fs)
         if len(peaks):
-            ref = _local_median(travel, travel_window)
-            # A lobe cut off by the end of the window shows only part of its travel, so
-            # the same bar would let a sliver through. It has to look like a whole
-            # repetition on what little is visible.
-            need = np.where(at_edge, edge_frac, travel_frac) * ref
-            keep = travel >= need
+            keep = travel >= travel_frac * np.median(travel)
             peaks, prom = peaks[keep], travel[keep]
         else:
             prom = travel

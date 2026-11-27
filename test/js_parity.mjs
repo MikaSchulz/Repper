@@ -9,16 +9,11 @@ import { fileURLToPath } from 'node:url';
 
 import { RepCounter } from '../web/pipeline.js';
 
-// JavaScript and Swift are pinned separately (`streaming_reps_js`,
-// `streaming_reps_swift`) because they disagree by one on `legcurl_slow`, and the
-// disagreement is pinned rather than averaged away so it stays visible.
-//
-// Both read the same analysis: on the window where the extra repetition is committed
-// they return identical peaks, identical times and identical lobe counts. The lobe sits
-// on the travel threshold and flickers across many windows, and the frontier never
-// revises a commit, so whichever implementation sees it twice first keeps it. Every
-// other fixture must still agree exactly, and that is what caught a real porting bug --
-// a median taking the upper middle on one side and averaging on the other.
+// The two ports are pinned separately and must agree with each other everywhere.
+// They disagreed by one on `legcurl_slow` until repetitions sharing a whole lobe were
+// merged; the pins stayed apart through that so the disagreement could not hide, and
+// this harness is also what caught a real porting bug -- a median taking the upper
+// middle on one side and averaging on the other.
 
 
 const here = dirname(fileURLToPath(import.meta.url));

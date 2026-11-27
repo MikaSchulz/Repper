@@ -6,9 +6,6 @@ struct RepConfig: Equatable {
     var windowS = 60.0          // trailing analysis window [s]; must span several reps
     var minRepS = 0.6           // minimum distance between repetitions
     var travelFrac = 0.30       // a lobe counts at this fraction of its neighbours' travel
-    var edgeFrac = 0.70         // a lobe cut off by the window edge has to show more
-    var travelWindow = 9        // how many neighbouring lobes set the yardstick
-    var minFullLobes = 2        // complete lobes needed before anything is committed
     var baselineSpanS = 20.0    // the zero line is a moving average over this span [s]
     var smoothS = 0.25
     var hampelS = 0.10
@@ -30,6 +27,9 @@ struct Analysis {
     var snr: Double
     var quiet: Bool
     var fullLobes: Int          // lobes the window did not cut off
+    /// Time spans of the lobes the window sees whole. A lobe is one repetition by
+    /// definition, so anything counted twice inside one of these was counted twice.
+    var wholeLobes: [(start: Double, end: Double)]
 }
 
 /// One sample of specific force (acceleration INCLUDING gravity), in m/s^2.
@@ -105,13 +105,6 @@ final class RepCounter {
         guard let r = Self.analyse(win, cfg: cfg) else { return nil }
         last = r
 
-        // A lobe is judged against the travel of its neighbours, and a window at the
-        // start of a set holds mostly lobes its own edges cut off -- with no complete
-        // ones to compare against, anything passes, and the frontier never takes a
-        // commit back. On a slow set that put two phantom repetitions into the first
-        // seven seconds.
-        if r.fullLobes < cfg.minFullLobes { return r }
-
         // Bootstrap: the cadence is unknown, and a detrend over roughly one repetition
         // can split that repetition in two. Commit nothing until the window covers at
         // least three apparent repetition periods.
@@ -146,8 +139,40 @@ final class RepCounter {
         }
         pending = seen.filter { $0.seen < cfg.sightings }
 
+        mergeInsideLobes(r)
         resolvePhases(r)
         return r
+    }
+
+    /// Repetitions sharing one whole lobe were one repetition all along.
+    ///
+    /// Early in a slow set the window is short relative to a single repetition, the
+    /// detrend oscillates across it, and the crossings that creates split that
+    /// repetition into several commits. Two repetitions later the same span sits
+    /// inside one lobe, and a lobe is one repetition — so the commits inside it
+    /// collapse to the first.
+    ///
+    /// Only lobes the window sees whole are used: one cut off by the window's own edge
+    /// proves nothing. Re-deriving the entire window instead was tried and is far
+    /// worse (87 against 39 over the recorded sets) — the frontier is not merely
+    /// conservative, it accumulates evidence across passes, and discarding that leaves
+    /// the count at the mercy of whatever the newest window happens to think.
+    private func mergeInsideLobes(_ r: Analysis) {
+        guard !r.wholeLobes.isEmpty, reps.count > 1 else { return }
+        var kept = reps
+        for lobe in r.wholeLobes {
+            let inside = kept.filter { $0 >= lobe.start && $0 <= lobe.end }
+            guard inside.count > 1 else { continue }
+            for extra in inside.dropFirst() {
+                if let i = kept.firstIndex(of: extra) {
+                    kept.remove(at: i)
+                    if i < phases.count { phases.remove(at: i) }
+                }
+            }
+        }
+        guard kept.count != reps.count else { return }
+        reps = kept
+        frontier = reps.last ?? -.infinity
     }
 
     /// Half the observed cadence, floored at minRepS: how far a re-detected peak may
@@ -227,6 +252,7 @@ final class RepCounter {
 
         var peaks: [Int] = []
         var fullLobes = 0
+        var wholeLobes: [(start: Double, end: Double)] = []
         if !quiet {
             // The zero line decides where a repetition ends, and the polynomial
             // detrend leaves a residual offset that wanders. Where it sits above zero,
@@ -235,16 +261,22 @@ final class RepCounter {
             let centred = Signal.recentre(vel, fs: cfg.fs, spanS: cfg.baselineSpanS)
             let lobes = Signal.positiveLobes(centred, fs: cfg.fs)
             fullLobes = lobes.atEdge.filter { !$0 }.count
-            let reference = Signal.localMedian(lobes.travel, window: cfg.travelWindow)
-            for k in 0..<lobes.peaks.count {
-                // A lobe cut off by the end of the window shows only part of its
-                // travel, so the same bar would let a sliver through.
-                let need = (lobes.atEdge[k] ? cfg.edgeFrac : cfg.travelFrac) * reference[k]
-                if lobes.travel[k] >= need { peaks.append(lobes.peaks[k]) }
+            for k in 0..<lobes.bounds.count where !lobes.atEdge[k] {
+                let (a, b) = lobes.bounds[k]
+                wholeLobes.append((start: tg[a], end: tg[Swift.min(b - 1, tg.count - 1)]))
+            }
+            // One bar for every lobe. A higher bar for lobes the window cut off, a
+            // median over a lobe's neighbours rather than all of them, and a minimum
+            // number of whole lobes were each measured against 38 real recordings and
+            // each cost nothing; removed together they left 22 errors where all three
+            // present gave 23.
+            let bar = cfg.travelFrac * Signal.median(lobes.travel)
+            for k in 0..<lobes.peaks.count where lobes.travel[k] >= bar {
+                peaks.append(lobes.peaks[k])
             }
         }
 
         return Analysis(t: tg, acc: acc, vel: vel, peaks: peaks, rate: rate, snr: snr,
-                        quiet: quiet, fullLobes: fullLobes)
+                        quiet: quiet, fullLobes: fullLobes, wholeLobes: wholeLobes)
     }
 }
