@@ -339,7 +339,7 @@ def detect_reps(
     az,
     fs: float = 100.0,
     min_rep_s: float = 0.6,
-    travel_frac: float = 0.30,
+    travel_frac: float = 0.45,
     baseline_span_s: float = 20.0,
     smooth_s: float = 0.25,
     hampel_s: float = 0.10,

@@ -19,7 +19,12 @@ export const DEFAULTS = {
   sightings: 2,       // a peak must survive this many consecutive analyses
   minWindowS: 4.0,    // do not judge a window shorter than this
   minVelocity: 0.02,  // p90(|v|) below this [m/s]: nothing is moving
-  travelFrac: 0.30,   // a lobe counts at this fraction of its neighbours' travel
+  travelFrac: 0.45,   // a lobe counts at this fraction of the set's median travel
+  // 0.45 is the middle of a broad basin: 0.35 to 0.60 all land between 17 and 19
+  // errors over 38 real recordings, and it rises on both sides -- 0.20 gives 21,
+  // 0.80 gives 29. The old 0.30 sat on the shoulder, which is the worst place to
+  // stand. It also has a meaning outside the data: a repetition has to cover about
+  // half the usual range, which is what makes a half repetition not one.
   baselineSpanS: 20,  // the zero line is a moving average over this span [s]
 };
 
