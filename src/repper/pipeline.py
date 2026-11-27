@@ -234,6 +234,25 @@ def _local_median(x: np.ndarray, window: int) -> np.ndarray:
     return out
 
 
+def recentre(v: np.ndarray, fs: float, span_s: float) -> np.ndarray:
+    """Put the zero line where the movement actually is, locally.
+
+    Lobes are read off sign changes, so the zero line decides where one repetition
+    ends. The polynomial detrend removes drift over the whole window, which leaves a
+    residual offset that wanders: where it sits above zero, consecutive repetitions
+    never dip below the line and merge into one lobe. On a 149 s set of 70 fast
+    repetitions that cost 27 of them — 54 lobes for 70 repetitions.
+
+    Subtracting a slow moving average fixes the line without touching the shape at the
+    scale of a repetition: 20 s is an order of magnitude above the fastest cadence and
+    still well inside the 60 s the live counter sees.
+    """
+    if span_s <= 0:
+        return v
+    win = max(1, int(round(span_s * fs)))
+    return v - moving_average(v, win)
+
+
 def positive_lobes(v: np.ndarray, fs: float):
     """Split the velocity into concentric lobes: (peak index, travel) per lobe.
 
@@ -339,6 +358,7 @@ def detect_reps(
     min_rep_s: float = 0.6,
     travel_frac: float = 0.30,
     travel_window: int = 9,
+    baseline_span_s: float = 20.0,
     edge_frac: float = 0.70,
     smooth_s: float = 0.25,
     hampel_s: float = 0.10,
@@ -408,7 +428,7 @@ def detect_reps(
     if scale < min_velocity:
         peaks, prom = np.array([], dtype=int), np.array([])
     else:
-        peaks, travel, at_edge = positive_lobes(v, fs)
+        peaks, travel, at_edge = positive_lobes(recentre(v, fs, baseline_span_s), fs)
         if len(peaks):
             ref = _local_median(travel, travel_window)
             # A lobe cut off by the end of the window shows only part of its travel, so

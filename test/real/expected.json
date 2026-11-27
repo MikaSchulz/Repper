@@ -9,9 +9,9 @@
     "quantized_decimals": 3,
     "true_reps": 52,
     "app_reps": 53,
-    "python_reps": 50,
+    "python_reps": 52,
     "python_detrend_order": 6,
-    "python_reps_order2": 33,
+    "python_reps_order2": 52,
     "true_times": [
       0.989,
       3.736,

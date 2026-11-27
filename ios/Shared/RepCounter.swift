@@ -9,6 +9,7 @@ struct RepConfig: Equatable {
     var edgeFrac = 0.70         // a lobe cut off by the window edge has to show more
     var travelWindow = 9        // how many neighbouring lobes set the yardstick
     var minFullLobes = 2        // complete lobes needed before anything is committed
+    var baselineSpanS = 20.0    // the zero line is a moving average over this span [s]
     var smoothS = 0.25
     var hampelS = 0.10
     var detrendOrder = 2
@@ -227,7 +228,12 @@ final class RepCounter {
         var peaks: [Int] = []
         var fullLobes = 0
         if !quiet {
-            let lobes = Signal.positiveLobes(vel, fs: cfg.fs)
+            // The zero line decides where a repetition ends, and the polynomial
+            // detrend leaves a residual offset that wanders. Where it sits above zero,
+            // consecutive repetitions never dip below the line and merge into one
+            // lobe; on a 149 s set of 70 fast repetitions that cost 27 of them.
+            let centred = Signal.recentre(vel, fs: cfg.fs, spanS: cfg.baselineSpanS)
+            let lobes = Signal.positiveLobes(centred, fs: cfg.fs)
             fullLobes = lobes.atEdge.filter { !$0 }.count
             let reference = Signal.localMedian(lobes.travel, window: cfg.travelWindow)
             for k in 0..<lobes.peaks.count {

@@ -23,6 +23,7 @@ export const DEFAULTS = {
   edgeFrac: 0.70,     // a lobe cut off by the window edge has to show more
   travelWindow: 9,    // how many neighbouring lobes set the yardstick
   minFullLobes: 2,    // complete lobes needed before anything is committed
+  baselineSpanS: 20,  // the zero line is a moving average over this span [s]
 };
 
 export function hampel(x, win) {
@@ -203,8 +204,10 @@ function localMedian(x, window) {
   const half = window >> 1;
   const out = new Array(n);
   for (let i = 0; i < n; i++) {
-    const seg = x.slice(Math.max(0, i - half), Math.min(n, i + half + 1)).sort((a, b) => a - b);
-    out[i] = seg[seg.length >> 1];
+    // median(), not the upper middle: at the ends of the array the neighbourhood has
+    // an even length, and taking a side there put JavaScript one repetition away from
+    // Swift on a slow fixture.
+    out[i] = median(x.slice(Math.max(0, i - half), Math.min(n, i + half + 1)));
   }
   return out;
 }
@@ -220,7 +223,23 @@ function localMedian(x, window) {
  *  A lobe's integral is how far the load travelled, which is what tells a real
  *  concentric phase from a stack ringing after the weight lands.
  */
-function countLobes(v, o, out) {
+/** Put the zero line where the movement actually is, locally.
+ *
+ *  Lobes are read off sign changes, so the zero line decides where a repetition ends.
+ *  The polynomial detrend removes drift over the whole window and leaves a residual
+ *  offset that wanders; where it sits above zero, consecutive repetitions never dip
+ *  below the line and merge into one lobe. On a 149 s set of 70 fast repetitions that
+ *  cost 27 of them. Subtracting a slow moving average fixes the line without touching
+ *  the shape at the scale of a repetition.
+ */
+function recentre(v, o) {
+  if (!(o.baselineSpanS > 0)) return v;
+  const base = movingAverage(v, Math.max(1, Math.round(o.baselineSpanS * o.fs)));
+  return v.map((x, i) => x - base[i]);
+}
+
+function countLobes(vRaw, o, out) {
+  const v = recentre(vRaw, o);
   const starts = [], ends = [];
   for (let i = 1; i < v.length; i++) {
     if (v[i] > 0 && v[i - 1] <= 0) starts.push(i);
@@ -237,10 +256,10 @@ function countLobes(v, o, out) {
     const a = starts[k], b = ends[k];
     if (b - a < 3) continue;
     let best = a, sum = 0;
-    for (let i = a; i < b; i++) {
-      if (v[i] > v[best]) best = i;
-      sum += v[i];
-    }
+    for (let i = a; i < b; i++) if (v[i] > v[best]) best = i;
+    // Trapezoid, matching the offline reference: with rectangles the two ports drifted
+    // apart on a lobe that sat exactly on the threshold.
+    for (let i = a; i < b - 1; i++) sum += 0.5 * (v[i] + v[i + 1]);
     peaks.push(best);
     travel.push(sum / o.fs);
     atEdge.push(a === 0 || b >= v.length);

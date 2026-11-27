@@ -166,6 +166,14 @@ enum Signal {
         }
     }
 
+    /// Subtract a slow moving average, so the zero line follows the movement locally
+    /// rather than being wherever the polynomial detrend happened to leave it.
+    static func recentre(_ v: [Double], fs: Double, spanS: Double) -> [Double] {
+        guard spanS > 0 else { return v }
+        let base = movingAverage(v, window: Swift.max(1, Int((spanS * fs).rounded())))
+        return (0..<v.count).map { v[$0] - base[$0] }
+    }
+
     /// Split the velocity into concentric lobes: the peak inside each one, how far the
     /// load travelled over it, and whether the window cut it off.
     ///
@@ -198,10 +206,12 @@ enum Signal {
             let a = starts[k], b = ends[k]
             if b - a < 3 { continue }
             var best = a
+            for i in a..<b where v[i] > v[best] { best = i }
+            // Trapezoid, matching the offline reference: with rectangles the two ports
+            // drifted apart on a lobe that sat exactly on the threshold.
             var sum = 0.0
-            for i in a..<b {
-                if v[i] > v[best] { best = i }
-                sum += v[i]
+            if b - a > 1 {
+                for i in a..<(b - 1) { sum += 0.5 * (v[i] + v[i + 1]) }
             }
             peaks.append(best)
             travel.append(sum / fs)

@@ -193,14 +193,22 @@ class TestRealRecording(unittest.TestCase):
                 self.assertLessEqual(abs(det.count - exp["true_reps"]),
                                      max(1, round(0.05 * exp["true_reps"])))
 
-    def test_order_two_still_loses_the_last_third(self):
-        """The regression itself: pin the old default and the set comes up short."""
+    def test_order_two_no_longer_loses_the_last_third(self):
+        """What used to be the regression, and why it stopped being one.
+
+        Pinning the old order-2 default used to leave this set short — the drift the
+        polynomial could not follow over 189 s flattened the repetitions in the last
+        third. Re-centring the velocity on a local baseline removes that residual
+        offset directly, so the order no longer decides the count here. The adaptive
+        order stays: `TestDriftOverLongSets` holds the mechanism synthetically, and two
+        defences against the same drift are not one too many.
+        """
         for name, exp in self.expected.items():
             with self.subTest(name):
                 t, x, y, z = load(REAL / f"{name}.csv.gz")
                 det = detect_reps(t, x, y, z, detrend_order=2)
                 self.assertEqual(det.count, exp["python_reps_order2"])
-                self.assertLess(det.count, exp["true_reps"])
+                self.assertEqual(det.count, exp["true_reps"])
 
     def test_repetitions_land_near_the_taps(self):
         """A right total can still be a miss plus an invention; match them in time."""

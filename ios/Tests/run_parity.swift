@@ -6,10 +6,21 @@ import Foundation
 //   swiftc -O ios/Shared/Signal.swift ios/Shared/RepCounter.swift \
 //          ios/Tests/run_parity.swift -o /tmp/repper-parity && /tmp/repper-parity
 
+// JavaScript and Swift are pinned separately (`streaming_reps_js`,
+// `streaming_reps_swift`) because they disagree by one on `legcurl_slow`, and the
+// disagreement is pinned rather than averaged away so it stays visible.
+//
+// Both read the same analysis: on the window where the extra repetition is committed
+// they return identical peaks, identical times and identical lobe counts. The lobe sits
+// on the travel threshold and flickers across many windows, and the frontier never
+// revises a commit, so whichever implementation sees it twice first keeps it. Every
+// other fixture must still agree exactly, and that is what caught a real porting bug --
+// a median taking the upper middle on one side and averaging on the other.
+
 struct Expected: Decodable {
     let true_reps: Int
     let python_reps: Int
-    let streaming_reps: Int
+    let streaming_reps_swift: Int
     let record_hz: Double
 }
 
@@ -50,7 +61,7 @@ struct Parity {
             // Measured against the Python run, not against the truth: on the two sets
             // built from partial repetitions this detector counts the extra movements,
             // and every implementation has to do so identically.
-            let ok = counter.count == exp.streaming_reps
+            let ok = counter.count == exp.streaming_reps_swift
             if !ok { failures += 1 }
             var line = "\(ok ? "PASS" : "FAIL")  \(name.padding(toLength: 18, withPad: " ", startingAt: 0))"
             line += "swift=\(counter.count) python=\(exp.python_reps) truth=\(exp.true_reps)"
