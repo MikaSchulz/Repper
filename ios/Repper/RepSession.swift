@@ -167,7 +167,12 @@ final class RepSession: ObservableObject {
             note: nil,
             rawFile: String(name),
             kind: "wrist",
-            machine: metadata[WristRecordingFile.Key.machine] as? String
+            machine: metadata[WristRecordingFile.Key.machine] as? String,
+            // Taps made on the wrist during the set. Without storing them the recording
+            // could only ever be judged against a total, never repetition by
+            // repetition.
+            manualMarks: metadata[WristRecordingFile.Key.marks] as? [Double] ?? [],
+            manualBottoms: metadata[WristRecordingFile.Key.bottoms] as? [Double] ?? []
         )
         store.importFile(at: url, record: record)
         message = "Aufnahme von der Uhr empfangen: \(record.machine ?? "—")"

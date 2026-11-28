@@ -58,23 +58,24 @@ struct WatchContentView: View {
     private var main: some View {
         VStack(spacing: 6) {
             if session.mode == .record {
-                Text(String(format: "%.0f s", session.recordedSeconds))
-                    .font(.system(size: 52, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(session.isRunning ? Color.red : Color.primary)
-                Text(session.isRunning ? "\(session.recordedSamples) SAMPLES" : "BEREIT")
-                    .font(.caption2).foregroundStyle(.secondary)
+                if session.isRunning {
+                    tapZones
+                } else {
+                    Text(String(format: "%.0f s", session.recordedSeconds))
+                        .font(.system(size: 52, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                    Text("BEREIT").font(.caption2).foregroundStyle(.secondary)
+                }
             } else {
                 Text("\(session.count)")
                     .font(.system(size: 64, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .minimumScaleFactor(0.5)
                     .lineLimit(1)
+                    // No phase word underneath: whether this moment is the way up or
+                    // the way down is something the lifter knows better than the watch.
+                    // The colour is enough to show that the counter is following along.
                     .foregroundStyle(session.phase == 1 ? Color.green : Color.primary)
-
-                Text(phaseLabel)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
 
             // A tap toggles the mode. A Picker would need the Digital Crown, which is
@@ -132,12 +133,38 @@ struct WatchContentView: View {
         }
     }
 
-    private var phaseLabel: String {
-        switch session.phase {
-        case 1: return "KONZENTRISCH"
-        case -1: return "EXZENTRISCH"
-        default: return session.isRunning ? "PAUSE" : "BEREIT"
+    /// Two targets filling the screen while a recording runs: the top of a repetition
+    /// and the bottom. A wrist recording could only ever be checked against a total
+    /// typed in afterwards; tapped boundaries say when each repetition happened, which
+    /// is what the detector has to be measured against.
+    private var tapZones: some View {
+        VStack(spacing: 4) {
+            zone("OBEN", count: session.marks.count, tint: .blue) { session.mark(top: true) }
+            zone("UNTEN", count: session.bottoms.count, tint: .orange) { session.mark(top: false) }
         }
+        .overlay(alignment: .topTrailing) {
+            if !(session.marks.isEmpty && session.bottoms.isEmpty) {
+                Button { session.undoMark() } label: {
+                    Image(systemName: "arrow.uturn.backward").font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .padding(4)
+            }
+        }
+    }
+
+    private func zone(_ title: String, count: Int, tint: Color,
+                      _ action: @escaping () -> Void) -> some View {
+        RoundedRectangle(cornerRadius: 10)
+            .fill(tint.opacity(0.25))
+            .overlay {
+                VStack(spacing: 0) {
+                    Text("\(count)").font(.title3.weight(.bold)).monospacedDigit()
+                    Text(title).font(.system(size: 10)).tracking(2)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: action)
     }
 }
 

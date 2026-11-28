@@ -52,6 +52,12 @@ final class WatchSession: WatchLink {
 
     // MARK: Recording mode
 
+    /// Taps made while recording: the top of a repetition and the bottom. They travel
+    /// with the file, so a wrist recording can be checked repetition by repetition
+    /// rather than only against a total typed in afterwards.
+    @Published private(set) var marks: [Double] = []
+    @Published private(set) var bottoms: [Double] = []
+
     @Published private(set) var recordedSamples = 0
     @Published private(set) var recordedSeconds = 0.0
     /// Set once a recording is finished: the watch then asks for the true count and the
@@ -103,6 +109,22 @@ final class WatchSession: WatchLink {
     }
 
     // MARK: - Standalone mode (watch counts)
+
+    /// One tap, one boundary of a repetition. Stamped with the newest sample's time so
+    /// the mark sits on the same clock as the signal it is marking.
+    func mark(top: Bool) {
+        guard isRunning, mode == .record else { return }
+        let t = samples.last?.t ?? recordedSeconds
+        if top { marks.append(t) } else { bottoms.append(t) }
+        WKInterfaceDevice.current().play(.click)
+    }
+
+    func undoMark() {
+        let lastTop = marks.last ?? -1
+        let lastBottom = bottoms.last ?? -1
+        if lastTop >= lastBottom, !marks.isEmpty { marks.removeLast() }
+        else if !bottoms.isEmpty { bottoms.removeLast() }
+    }
 
     func start() {
         switch mode {
@@ -231,6 +253,8 @@ final class WatchSession: WatchLink {
         }
         beginWorkout()
         samples.removeAll()
+        marks.removeAll()
+        bottoms.removeAll()
         recordedSamples = 0
         recordedSeconds = 0
         pendingRecording = nil
@@ -277,6 +301,9 @@ final class WatchSession: WatchLink {
             samples.removeAll()
             return
         }
+        // The taps already say how many repetitions there were; the stepper starts
+        // there rather than at whatever it held last.
+        if !marks.isEmpty { pendingReps = marks.count }
         pendingRecording = samples        // now the watch asks for count and machine
     }
 
@@ -292,6 +319,8 @@ final class WatchSession: WatchLink {
             WristRecordingFile.Key.machine: pendingMachine,
             WristRecordingFile.Key.duration: samples.last?.t ?? 0,
             WristRecordingFile.Key.sampleCount: samples.count,
+            WristRecordingFile.Key.marks: marks.map { ($0 * 1000).rounded() / 1000 },
+            WristRecordingFile.Key.bottoms: bottoms.map { ($0 * 1000).rounded() / 1000 },
         ]
         do {
             try WristRecordingFile.csv(samples).write(to: url, atomically: true, encoding: .utf8)
@@ -303,6 +332,8 @@ final class WatchSession: WatchLink {
         }
         pendingRecording = nil
         self.samples.removeAll()
+        marks.removeAll()
+        bottoms.removeAll()
         message = "Gespeichert — wird ans Handy übertragen"
         sendQueued()
     }

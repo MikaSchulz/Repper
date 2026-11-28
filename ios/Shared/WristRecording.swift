@@ -23,6 +23,11 @@ enum WristRecordingFile {
         static let machine = "machine"
         static let duration = "duration"
         static let sampleCount = "sampleCount"
+        /// Times, in recording seconds, of the taps made while the set ran: the top of
+        /// each repetition and the bottom. A total alone says how many; these say when,
+        /// which is what a per-repetition check needs.
+        static let marks = "marks"
+        static let bottoms = "bottoms"
     }
 
     static func csv(_ samples: [WristSample]) -> String {

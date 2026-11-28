@@ -24,6 +24,12 @@ class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
 
     private let session: WCSession? = WCSession.isSupported() ? .default : nil
 
+    /// The last payload that went out, and when. Live values are offered several times
+    /// a second; sending an unchanged one is work the system may answer by throttling
+    /// the channel, which is the opposite of what a reliable link needs.
+    private var lastSent: NSDictionary?
+    private var lastSentAt = Date.distantPast
+
     func activate() {
         guard let session else {
             linkStatus = "WatchConnectivity nicht unterstützt"
@@ -53,8 +59,12 @@ class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
         parts.append(session.isCompanionAppInstalled ? "App auf Handy" : "App fehlt auf Handy")
         #endif
         parts.append(session.isReachable ? "erreichbar" : "nicht erreichbar")
-        linkStatus = parts.joined(separator: " · ")
-        reachable = session.isReachable
+        // Only publish on an actual change: this runs on every send, and writing to a
+        // @Published property rebuilds the views observing it whether or not the value
+        // differs.
+        let next = parts.joined(separator: " · ")
+        if next != linkStatus { linkStatus = next }
+        if session.isReachable != reachable { reachable = session.isReachable }
     }
 
     /// Live values go out as a message when the counterpart is reachable, and as
@@ -62,12 +72,35 @@ class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     /// but only the most recent one is kept, which is exactly right for a counter.
     func send(_ payload: [String: Any]) {
         guard let session, session.activationState == .activated else { return }
+
+        // Unchanged values are repeated once every two seconds and otherwise skipped.
+        // The heartbeat matters because a dropped message leaves the counterpart
+        // showing a stale count with nothing to correct it; without it, deduplication
+        // would make that permanent.
+        let snapshot = payload as NSDictionary
+        let stale = Date().timeIntervalSince(lastSentAt) > 2
+        guard snapshot != lastSent || stale else { return }
+        lastSent = snapshot
+        lastSentAt = Date()
+
         if session.isReachable {
-            session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
+            // A message that fails is simply gone, and the error used to be discarded.
+            // Application context survives a sleeping counterpart and keeps only the
+            // newest value, which is exactly what a counter wants.
+            session.sendMessage(payload, replyHandler: nil) { [weak self] _ in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { self?.sendAsContext(payload) }
+                }
+            }
         } else {
-            try? session.updateApplicationContext(payload)
+            sendAsContext(payload)
         }
         refreshStatus()
+    }
+
+    private func sendAsContext(_ payload: [String: Any]) {
+        guard let session, session.activationState == .activated else { return }
+        try? session.updateApplicationContext(payload)
     }
 
     func handle(_ payload: [String: Any]) {}
@@ -130,10 +163,23 @@ class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     }
 
     #if os(iOS)
+    /// Pairing, unpairing and installing the watch app all land here. Without it the
+    /// status line stayed as it was until something else happened to refresh it, so the
+    /// app could keep claiming there was no watch well after one had been paired.
+    nonisolated func sessionWatchStateDidChange(_ session: WCSession) {
+        DispatchQueue.main.async { MainActor.assumeIsolated { self.refreshStatus() } }
+    }
+
     nonisolated func sessionDidBecomeInactive(_ session: WCSession) {}
 
     nonisolated func sessionDidDeactivate(_ session: WCSession) {
         session.activate()          // re-activate for the next paired watch
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                self.lastSent = nil     // the next watch has seen nothing yet
+                self.refreshStatus()
+            }
+        }
     }
     #endif
 }
