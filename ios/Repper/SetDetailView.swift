@@ -1,12 +1,17 @@
 import SwiftUI
 
 /// One stored set, re-analysed and drawn: the velocity curve, the repetitions the
-/// detector counted, and the marks tapped in while lifting -- on top of each other.
+/// detector counted, and the marks tapped in while lifting — on top of each other.
 ///
 /// The marks can be moved, added and deleted here. Tapping during a set is rough: the
 /// hand is busy and the tap lands late, so what gets stored is a first pass. Correcting
-/// it against the curve is what turns a recording into a reference the detector can
-/// actually be measured against.
+/// it against the curve is what turns a recording into a reference the detector can be
+/// measured against, which means this screen has to be genuinely workable — pinch to
+/// zoom, drag to pan, and a mark that follows the finger.
+///
+/// Everything is drawn in a single `Canvas` pass. The first version built the curve as a
+/// `Path` and every mark as its own view inside a `ForEach`, so each step of a drag
+/// rebuilt the whole hierarchy; at a few thousand samples that is visibly slow.
 struct SetDetailView: View {
     let record: SetRecord
     @ObservedObject var store: SetStore
@@ -16,39 +21,58 @@ struct SetDetailView: View {
     @State private var bottoms: [Double] = []
     @State private var selected: Mark?
     @State private var loading = true
-    /// Time the mark being dragged started at, so the drag works off its own
-    /// translation; absolute hit locations shift meaning depending on where in the
-    /// modifier chain `.position` sits, and that is not worth depending on.
-    @State private var dragOrigin: Double?
+
+    /// Visible span as a fraction of the whole recording, and where that span starts.
+    @State private var zoom: Double = 1
+    @State private var originT: Double = 0
+    @State private var zoomBase: Double = 1
+
+    /// What the current finger-down is doing. Decided once, on the first movement, so a
+    /// drag cannot change its mind halfway and leave a mark somewhere unintended.
+    private enum Grab: Equatable { case none, pan(Double), move(Mark) }
+    @State private var grab: Grab = .none
+    @State private var dragStart: CGPoint?
 
     struct Mark: Equatable {
         var isTop: Bool
         var index: Int
     }
 
-    private let plotHeight: CGFloat = 300
+    private let hitRadius: CGFloat = 26
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+        GeometryReader { outer in
+            let landscape = outer.size.width > outer.size.height
+            VStack(spacing: 10) {
                 if loading {
                     ProgressView("Signal wird ausgewertet …")
-                        .frame(maxWidth: .infinity, minHeight: plotHeight)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if analysis == nil {
                     Text("Rohsignal nicht lesbar.")
                         .foregroundStyle(.orange)
-                        .frame(maxWidth: .infinity, minHeight: plotHeight)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     plot
-                    legend
+                        .frame(maxHeight: landscape ? .infinity : 340)
+                    if !landscape { legend }
                     editor
+                    if !landscape { counts }
                 }
-                counts
             }
-            .padding()
+            .padding(landscape ? 8 : 16)
         }
         .navigationTitle(record.shortDate)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) { zoom = 1; originT = 0 }
+                } label: {
+                    Label("Ganzer Satz", systemImage: "arrow.left.and.right")
+                }
+                .disabled(zoom == 1)
+            }
+        }
         .task {
             let samples = store.samples(for: record)
             analysis = RepCounter.analyse(samples)
@@ -62,85 +86,140 @@ struct SetDetailView: View {
 
     private var plot: some View {
         GeometryReader { geo in
-            ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.05))
-                curve(in: geo.size)
-                zeroLine(in: geo.size)
-                ForEach(countedTimes, id: \.self) { t in
-                    Circle().fill(Color.red).frame(width: 9, height: 9)
-                        .position(x: xFor(t, geo.size.width), y: yFor(t, geo.size.height))
-                }
-                marks(isTop: true, times: tops, in: geo.size)
-                marks(isTop: false, times: bottoms, in: geo.size)
+            let size = geo.size
+            Canvas(opaque: false, rendersAsynchronously: false) { ctx, _ in
+                draw(ctx, size)
             }
-            // A tap away from every mark adds one: upper half top, lower half bottom,
-            // the same split as the two tap zones during a set.
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.05)))
             .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0).onEnded { value in
-                addMark(at: value.location, in: geo.size)
-            })
+            .gesture(dragGesture(size))
+            .simultaneousGesture(magnify)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
         }
-        .frame(height: plotHeight)
     }
 
-    private func curve(in size: CGSize) -> some View {
-        Path { path in
-            guard let a = analysis, a.vel.count > 1 else { return }
-            let step = max(1, a.vel.count / Int(size.width * 2))
+    /// One pass: zero line, curve, counted repetitions, both kinds of mark.
+    private func draw(_ ctx: GraphicsContext, _ size: CGSize) {
+        guard let a = analysis, a.vel.count > 1, let span = span else { return }
+        let visible = span.last - span.first
+        let lo = originT, hi = originT + visible * (1 / zoom)
+
+        var ctx = ctx
+        let zeroY = yFor(0, size.height)
+        ctx.stroke(Path { $0.move(to: CGPoint(x: 0, y: zeroY))
+                          $0.addLine(to: CGPoint(x: size.width, y: zeroY)) },
+                   with: .color(.white.opacity(0.2)), lineWidth: 1)
+
+        // One point per pixel column: the curve cannot show more than that, and at a
+        // few thousand samples drawing them all is most of the cost.
+        let i0 = max(0, index(of: lo, a))
+        let i1 = min(a.vel.count - 1, index(of: hi, a))
+        if i1 > i0 {
+            let step = max(1, (i1 - i0) / max(1, Int(size.width)))
+            var path = Path()
             var first = true
-            for i in stride(from: 0, to: a.vel.count, by: step) {
-                let p = CGPoint(x: size.width * CGFloat(i) / CGFloat(a.vel.count - 1),
-                                y: yForValue(a.vel[i], size.height))
+            for i in stride(from: i0, through: i1, by: step) {
+                let p = CGPoint(x: xFor(a.t[i], size.width), y: yFor(a.vel[i], size.height))
                 if first { path.move(to: p); first = false } else { path.addLine(to: p) }
             }
+            ctx.stroke(path, with: .color(.green), lineWidth: 2)
         }
-        .stroke(Color.green, lineWidth: 2)
+
+        for t in record.repTimes where t >= lo && t <= hi {
+            let p = CGPoint(x: xFor(t, size.width), y: yFor(valueAt(t, a), size.height))
+            ctx.fill(Path(ellipseIn: CGRect(x: p.x - 4.5, y: p.y - 4.5, width: 9, height: 9)),
+                     with: .color(.red))
+        }
+
+        drawMarks(&ctx, size, tops, isTop: true, lo: lo, hi: hi)
+        drawMarks(&ctx, size, bottoms, isTop: false, lo: lo, hi: hi)
     }
 
-    private func zeroLine(in size: CGSize) -> some View {
-        Path { p in
-            let y = yForValue(0, size.height)
-            p.move(to: CGPoint(x: 0, y: y))
-            p.addLine(to: CGPoint(x: size.width, y: y))
-        }
-        .stroke(Color.white.opacity(0.2), lineWidth: 1)
-    }
-
-    /// One draggable handle per mark. Top marks hang from the top edge, bottom marks
-    /// stand on the bottom one, so the two never overlap and can be told apart at a
-    /// glance while dragging.
-    private func marks(isTop: Bool, times: [Double], in size: CGSize) -> some View {
-        ForEach(Array(times.enumerated()), id: \.offset) { index, t in
-            let mark = Mark(isTop: isTop, index: index)
-            let isSelected = selected == mark
+    private func drawMarks(_ ctx: inout GraphicsContext, _ size: CGSize, _ times: [Double],
+                           isTop: Bool, lo: Double, hi: Double) {
+        let tint: Color = isTop ? .blue : .orange
+        for (i, t) in times.enumerated() where t >= lo && t <= hi {
+            let on = selected == Mark(isTop: isTop, index: i)
             let x = xFor(t, size.width)
-            let tint: Color = isTop ? .blue : .orange
-
-            ZStack {
-                Rectangle()
-                    .fill(tint.opacity(isSelected ? 0.95 : 0.55))
-                    .frame(width: isSelected ? 3 : 2, height: size.height)
-                Circle()
-                    .fill(tint)
-                    .frame(width: isSelected ? 26 : 20, height: isSelected ? 26 : 20)
-                    .overlay(Circle().stroke(.white.opacity(isSelected ? 0.9 : 0.3),
-                                             lineWidth: isSelected ? 2 : 1))
-                    .offset(y: isTop ? -size.height / 2 + 13 : size.height / 2 - 13)
-            }
-            .frame(width: 44, height: size.height)   // finger-sized grab area
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        if selected != mark { selected = mark; dragOrigin = t }
-                        let base = dragOrigin ?? t
-                        setTime(mark, base + secondsPerPoint(size.width)
-                                * Double(value.translation.width))
-                    }
-                    .onEnded { _ in dragOrigin = nil; persist() }
-            )
-            .position(x: x, y: size.height / 2)
+            ctx.stroke(Path { $0.move(to: CGPoint(x: x, y: 0))
+                              $0.addLine(to: CGPoint(x: x, y: size.height)) },
+                       with: .color(tint.opacity(on ? 0.95 : 0.5)),
+                       lineWidth: on ? 3 : 2)
+            let r: CGFloat = on ? 13 : 10
+            let cy = isTop ? r + 2 : size.height - r - 2
+            ctx.fill(Path(ellipseIn: CGRect(x: x - r, y: cy - r, width: r * 2, height: r * 2)),
+                     with: .color(tint))
+            ctx.stroke(Path(ellipseIn: CGRect(x: x - r, y: cy - r, width: r * 2, height: r * 2)),
+                       with: .color(.white.opacity(on ? 0.9 : 0.35)), lineWidth: on ? 2 : 1)
         }
+    }
+
+    // MARK: - Gestures
+
+    private var magnify: some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                guard let span else { return }
+                let whole = span.last - span.first
+                let centre = originT + (whole / zoom) / 2
+                zoom = min(60, max(1, zoomBase * value.magnification))
+                originT = clampOrigin(centre - (whole / zoom) / 2)
+            }
+            .onEnded { _ in zoomBase = zoom }
+    }
+
+    /// A single gesture decides, on the first movement, whether this is a mark being
+    /// dragged or the view being panned. Two competing gestures would make grabbing a
+    /// mark near the edge a coin toss.
+    private func dragGesture(_ size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if dragStart == nil {
+                    dragStart = value.startLocation
+                    grab = hitTest(value.startLocation, size).map { Grab.move($0) }
+                        ?? .pan(originT)
+                    if case .move(let m) = grab { selected = m }
+                }
+                switch grab {
+                case .move(let m):
+                    setTime(m, timeFor(value.location.x, size.width))
+                case .pan(let start):
+                    guard let span else { return }
+                    let perPoint = (span.last - span.first) / zoom / Double(size.width)
+                    originT = clampOrigin(start - Double(value.translation.width) * perPoint)
+                case .none:
+                    break
+                }
+            }
+            .onEnded { value in
+                let moved = hypot(value.translation.width, value.translation.height)
+                switch grab {
+                case .move:
+                    persist()
+                case .pan:
+                    // A press that went nowhere is a tap: upper half adds a mark at the
+                    // top, lower half one at the bottom — the same split as the two tap
+                    // zones during a set.
+                    if moved < 10 { addMark(at: value.startLocation, in: size) }
+                case .none:
+                    break
+                }
+                grab = .none
+                dragStart = nil
+            }
+    }
+
+    private func hitTest(_ point: CGPoint, _ size: CGSize) -> Mark? {
+        var best: (Mark, CGFloat)?
+        for (i, t) in tops.enumerated() {
+            let d = abs(xFor(t, size.width) - point.x)
+            if d < hitRadius, best == nil || d < best!.1 { best = (Mark(isTop: true, index: i), d) }
+        }
+        for (i, t) in bottoms.enumerated() {
+            let d = abs(xFor(t, size.width) - point.x)
+            if d < hitRadius, best == nil || d < best!.1 { best = (Mark(isTop: false, index: i), d) }
+        }
+        return best?.0
     }
 
     // MARK: - Geometry
@@ -150,42 +229,43 @@ struct SetDetailView: View {
         return (f, l)
     }
 
+    private var visibleSpan: Double {
+        guard let span else { return 1 }
+        return (span.last - span.first) / zoom
+    }
+
+    private func clampOrigin(_ t: Double) -> Double {
+        guard let span else { return 0 }
+        return min(max(span.first, t), span.last - visibleSpan)
+    }
+
     private func xFor(_ t: Double, _ width: CGFloat) -> CGFloat {
-        guard let s = span else { return 0 }
-        return width * CGFloat((t - s.first) / (s.last - s.first))
+        CGFloat((t - originT) / visibleSpan) * width
     }
 
     private func timeFor(_ x: CGFloat, _ width: CGFloat) -> Double {
-        guard let s = span, width > 0 else { return 0 }
-        let frac = min(1, max(0, Double(x / width)))
-        return s.first + frac * (s.last - s.first)
+        guard let span, width > 0 else { return 0 }
+        return min(span.last, max(span.first, originT + Double(x / width) * visibleSpan))
     }
 
-    private func yForValue(_ v: Double, _ height: CGFloat) -> CGFloat {
+    private func yFor(_ v: Double, _ height: CGFloat) -> CGFloat {
         guard let a = analysis else { return height / 2 }
         let scale = max(a.vel.map(abs).max() ?? 1, 1e-6)
-        return height / 2 - CGFloat(v / scale) * (height / 2 - 14)
+        return height / 2 - CGFloat(v / scale) * (height / 2 - 16)
     }
 
-    private func yFor(_ t: Double, _ height: CGFloat) -> CGFloat {
-        guard let a = analysis, let s = span, a.vel.count > 1 else { return height / 2 }
-        let frac = (t - s.first) / (s.last - s.first)
-        let i = min(a.vel.count - 1, max(0, Int(frac * Double(a.vel.count - 1))))
-        return yForValue(a.vel[i], height)
+    private func index(of t: Double, _ a: Analysis) -> Int {
+        guard let f = a.t.first else { return 0 }
+        return min(a.vel.count - 1, max(0, Int((t - f) * RepConfig.default.fs)))
     }
 
-    private var countedTimes: [Double] { record.repTimes }
+    private func valueAt(_ t: Double, _ a: Analysis) -> Double { a.vel[index(of: t, a)] }
 
     // MARK: - Editing
 
-    private func secondsPerPoint(_ width: CGFloat) -> Double {
-        guard let s = span, width > 0 else { return 0 }
-        return (s.last - s.first) / Double(width)
-    }
-
     private func setTime(_ mark: Mark, _ value: Double) {
-        guard let s = span else { return }
-        let t = min(s.last, max(s.first, value))
+        guard let span else { return }
+        let t = min(span.last, max(span.first, value))
         if mark.isTop {
             guard tops.indices.contains(mark.index) else { return }
             tops[mark.index] = t
@@ -198,15 +278,6 @@ struct SetDetailView: View {
     private func addMark(at point: CGPoint, in size: CGSize) {
         let t = timeFor(point.x, size.width)
         let isTop = point.y < size.height / 2
-        // Near an existing mark this is a selection, not a new mark: otherwise every
-        // attempt to grab one would leave a duplicate behind.
-        let nearby = (isTop ? tops : bottoms).enumerated()
-            .min { abs($0.element - t) < abs($1.element - t) }
-        if let nearby, abs(nearby.element - t) * Double(size.width) /
-            ((span.map { $0.last - $0.first }) ?? 1) < 22 {
-            selected = Mark(isTop: isTop, index: nearby.offset)
-            return
-        }
         if isTop {
             tops.append(t); tops.sort()
             selected = Mark(isTop: true, index: tops.firstIndex(of: t) ?? 0)
@@ -218,12 +289,8 @@ struct SetDetailView: View {
     }
 
     private func nudge(_ seconds: Double) {
-        guard let mark = selected else { return }
-        if mark.isTop, tops.indices.contains(mark.index) {
-            tops[mark.index] += seconds
-        } else if !mark.isTop, bottoms.indices.contains(mark.index) {
-            bottoms[mark.index] += seconds
-        }
+        guard let mark = selected, let t = timeOf(mark) else { return }
+        setTime(mark, t + seconds)
         persist()
     }
 
@@ -244,6 +311,10 @@ struct SetDetailView: View {
         store.setMarks(tops: tops, bottoms: bottoms, for: record)
     }
 
+    private func timeOf(_ mark: Mark) -> Double? {
+        mark.isTop ? tops[safe: mark.index] : bottoms[safe: mark.index]
+    }
+
     // MARK: - Chrome
 
     private var legend: some View {
@@ -252,6 +323,10 @@ struct SetDetailView: View {
             dot(.blue, "oben")
             dot(.orange, "unten")
             Spacer()
+            if zoom > 1 {
+                Text(String(format: "%.0f s sichtbar", visibleSpan))
+                    .foregroundStyle(.secondary).monospacedDigit()
+            }
         }
         .font(.caption2)
     }
@@ -266,41 +341,37 @@ struct SetDetailView: View {
     @ViewBuilder
     private var editor: some View {
         if let mark = selected, let time = timeOf(mark) {
-            VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
                 Text("\(mark.isTop ? "Oben" : "Unten") · \(String(format: "%.2f s", time))")
-                    .font(.subheadline.weight(.semibold))
-                    .monospacedDigit()
-                HStack(spacing: 8) {
-                    Button { nudge(-0.05) } label: { step("−0,05") }
-                    Button { nudge(0.05) } label: { step("+0,05") }
-                    Spacer()
-                    Button(role: .destructive) { deleteSelected() } label: {
-                        Label("Löschen", systemImage: "trash").font(.caption)
-                    }
-                    .buttonStyle(.bordered)
+                    .font(.subheadline.weight(.semibold)).monospacedDigit()
+                    .frame(minWidth: 112, alignment: .leading)
+                // Finer steps once zoomed in, where that precision is visible anyway.
+                Button { nudge(zoom > 4 ? -0.01 : -0.05) } label: { step(zoom > 4 ? "−0,01" : "−0,05") }
+                Button { nudge(zoom > 4 ? 0.01 : 0.05) } label: { step(zoom > 4 ? "+0,01" : "+0,05") }
+                Spacer()
+                Button(role: .destructive) { deleteSelected() } label: {
+                    Image(systemName: "trash")
                 }
+                .buttonStyle(.bordered)
             }
-            .padding(10)
+            .padding(.horizontal, 10).padding(.vertical, 8)
             .background(Color.white.opacity(0.06))
             .clipShape(RoundedRectangle(cornerRadius: 10))
         } else {
-            Text("Marke ziehen zum Verschieben. Tippen in die obere Hälfte setzt eine "
-                 + "Marke oben, in die untere eine unten.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            Text("Ziehen verschiebt die Ansicht, Auf- und Zuziehen zoomt. Marke ziehen "
+                 + "verschiebt sie; Tippen setzt eine neue — oben in der oberen Hälfte, "
+                 + "unten in der unteren.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private func step(_ title: String) -> some View {
         Text(title)
             .font(.caption).monospacedDigit()
-            .padding(.horizontal, 12).padding(.vertical, 6)
+            .padding(.horizontal, 10).padding(.vertical, 7)
             .background(Color.white.opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func timeOf(_ mark: Mark) -> Double? {
-        mark.isTop ? tops[safe: mark.index] : bottoms[safe: mark.index]
     }
 
     private var counts: some View {
