@@ -37,9 +37,16 @@ struct SetDetailView: View {
 
     /// What the current finger-down is doing. Decided once, on the first movement, so a
     /// drag cannot change its mind halfway and leave a mark somewhere unintended.
-    private enum Grab: Equatable { case none, pan(Double), move(Mark) }
+    private enum Grab: Equatable { case none, pan(Double), move(Mark, Double) }
     @State private var grab: Grab = .none
     @State private var dragStart: CGPoint?
+    /// How much the current drag is slowed down, shown while it is.
+    @State private var gain: Double = 1
+
+    /// Snapshots of both mark lists. Correcting a set is fiddly work and a wrong drag
+    /// is easy; without a way back the only repair is to remember where the mark was.
+    @State private var past: [([Double], [Double])] = []
+    @State private var future: [([Double], [Double])] = []
 
     struct Mark: Equatable {
         var isTop: Bool
@@ -72,12 +79,14 @@ struct SetDetailView: View {
         .navigationTitle(record.shortDate)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button { undo() } label: { Image(systemName: "arrow.uturn.backward") }
+                    .disabled(past.isEmpty)
+                Button { redo() } label: { Image(systemName: "arrow.uturn.forward") }
+                    .disabled(future.isEmpty)
                 Button {
                     withAnimation(.easeOut(duration: 0.15)) { zoom = 1; originT = tFirst }
-                } label: {
-                    Label("Ganzer Satz", systemImage: "arrow.left.and.right")
-                }
+                } label: { Image(systemName: "arrow.left.and.right") }
                 .disabled(zoom == 1)
             }
         }
@@ -190,13 +199,24 @@ struct SetDetailView: View {
             .onChanged { value in
                 if dragStart == nil {
                     dragStart = value.startLocation
-                    grab = hitTest(value.startLocation, size).map { Grab.move($0) }
-                        ?? .pan(originT)
-                    if case .move(let m) = grab { selected = m }
+                    if let m = hitTest(value.startLocation, size), let t = timeOf(m) {
+                        beginEdit()
+                        grab = .move(m, t)
+                        selected = m
+                    } else {
+                        grab = .pan(originT)
+                    }
                 }
                 switch grab {
-                case .move(let m):
-                    setTime(m, timeFor(value.location.x, size.width))
+                case .move(let m, let startTime):
+                    // Pull the finger away from the line to slow the mark down, the way
+                    // a video scrubber does. Straight across is one to one; further down
+                    // or up gives a quarter, then a twelfth, so a hundredth of a second
+                    // is reachable without zooming in first.
+                    let dy = abs(value.location.y - value.startLocation.y)
+                    gain = dy < 48 ? 1 : (dy < 120 ? 0.25 : 0.08)
+                    let perPoint = visibleSpan / Double(size.width)
+                    setTime(m, startTime + Double(value.translation.width) * perPoint * gain)
                 case .pan(let start):
                     let perPoint = visibleSpan / Double(size.width)
                     originT = clampOrigin(start - Double(value.translation.width) * perPoint)
@@ -206,6 +226,7 @@ struct SetDetailView: View {
             }
             .onEnded { value in
                 let moved = hypot(value.translation.width, value.translation.height)
+                gain = 1
                 switch grab {
                 case .move:
                     persist()
@@ -213,7 +234,10 @@ struct SetDetailView: View {
                     // A press that went nowhere is a tap: upper half adds a mark at the
                     // top, lower half one at the bottom — the same split as the two tap
                     // zones during a set.
-                    if moved < 10 { addMark(at: value.startLocation, in: size) }
+                    if moved < 10 {
+                        beginEdit()
+                        addMark(at: value.startLocation, in: size)
+                    }
                 case .none:
                     break
                 }
@@ -288,14 +312,39 @@ struct SetDetailView: View {
         persist()
     }
 
+    /// Remember where the marks were, before changing them.
+    private func beginEdit() {
+        past.append((tops, bottoms))
+        if past.count > 40 { past.removeFirst() }
+        future.removeAll()
+    }
+
+    private func undo() {
+        guard let step = past.popLast() else { return }
+        future.append((tops, bottoms))
+        (tops, bottoms) = step
+        selected = nil
+        persist()
+    }
+
+    private func redo() {
+        guard let step = future.popLast() else { return }
+        past.append((tops, bottoms))
+        (tops, bottoms) = step
+        selected = nil
+        persist()
+    }
+
     private func nudge(_ seconds: Double) {
         guard let mark = selected, let t = timeOf(mark) else { return }
+        beginEdit()
         setTime(mark, t + seconds)
         persist()
     }
 
     private func deleteSelected() {
         guard let mark = selected else { return }
+        beginEdit()
         if mark.isTop, tops.indices.contains(mark.index) {
             tops.remove(at: mark.index)
         } else if !mark.isTop, bottoms.indices.contains(mark.index) {
@@ -323,7 +372,10 @@ struct SetDetailView: View {
             dot(.blue, "oben")
             dot(.orange, "unten")
             Spacer()
-            if zoom > 1 {
+            if gain < 1 {
+                Text(String(format: "fein ×%.2f", gain))
+                    .foregroundStyle(.yellow).monospacedDigit()
+            } else if zoom > 1 {
                 Text(String(format: "%.0f s sichtbar", visibleSpan))
                     .foregroundStyle(.secondary).monospacedDigit()
             }
@@ -358,9 +410,10 @@ struct SetDetailView: View {
             .background(Color.white.opacity(0.06))
             .clipShape(RoundedRectangle(cornerRadius: 10))
         } else {
-            Text("Ziehen verschiebt die Ansicht, Auf- und Zuziehen zoomt. Marke ziehen "
-                 + "verschiebt sie; Tippen setzt eine neue — oben in der oberen Hälfte, "
-                 + "unten in der unteren.")
+            Text("Ziehen verschiebt die Ansicht, Auf- und Zuziehen zoomt. Tippen setzt "
+                 + "eine Marke — oben in der oberen Hälfte, unten in der unteren. Eine "
+                 + "Marke ziehen verschiebt sie; dabei nach unten ausweichen macht sie "
+                 + "langsamer, bis auf ein Zwölftel.")
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
