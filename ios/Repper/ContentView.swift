@@ -9,6 +9,50 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
+        GeometryReader { geo in
+            // Landscape is not the same screen turned sideways: a portrait stack has
+            // 390 points of height there and everything in it collapses. The counter
+            // and the controls go to a narrow column on the left, leaving the full
+            // height to the plot and the tap zones, which are what a set is read from.
+            Group {
+                if geo.size.width > geo.size.height {
+                    landscapeLayout
+                } else {
+                    portraitLayout
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 6)
+        }
+        .background(Color.black.ignoresSafeArea())
+        .preferredColorScheme(.dark)
+        .sheet(isPresented: $showHistory) { HistoryView(store: session.store) }
+        .sheet(isPresented: $showSettings) { SettingsView(session: session) }
+        .alert(session.isMeasuring ? "Messreihe" : "Übung",
+               isPresented: $showLabelEditor) {
+            TextField(session.isMeasuring ? "z. B. Handy flach auf Stack, langsam"
+                                          : "z. B. Lat Pulldown 60 kg",
+                      text: $labelDraft)
+            Button("Sichern") { session.activeLabel = labelDraft }
+            Button("Leeren", role: .destructive) { session.activeLabel = "" }
+            Button("Abbrechen", role: .cancel) { }
+        } message: {
+            Text(session.isMeasuring
+                 ? "Wird auf jeden Satz gestempelt, bis du sie änderst. "
+                   + "Beschreib, wie das Handy liegt und wie du dich bewegst."
+                 : "Wird auf jeden Satz gestempelt, bis du sie änderst. "
+                   + "Übung und Gewicht reichen, um den Satz später dem Training "
+                   + "zuzuordnen.")
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { session.refreshWatchLink() }
+        }
+    }
+
+
+    // MARK: - Layouts
+
+    private var portraitLayout: some View {
         VStack(spacing: 10) {
             modePicker
 
@@ -55,46 +99,61 @@ struct ContentView: View {
             secondaryControls
             startButton
         }
-        .padding(.horizontal)
-        .padding(.bottom, 6)
-        .background(Color.black.ignoresSafeArea())
-        .preferredColorScheme(.dark)
-        .sheet(isPresented: $showHistory) { HistoryView(store: session.store) }
-        .sheet(isPresented: $showSettings) { SettingsView(session: session) }
-        .alert(session.isMeasuring ? "Messreihe" : "Übung",
-               isPresented: $showLabelEditor) {
-            TextField(session.isMeasuring ? "z. B. Handy flach auf Stack, langsam"
-                                          : "z. B. Lat Pulldown 60 kg",
-                      text: $labelDraft)
-            Button("Sichern") { session.activeLabel = labelDraft }
-            Button("Leeren", role: .destructive) { session.activeLabel = "" }
-            Button("Abbrechen", role: .cancel) { }
-        } message: {
-            Text(session.isMeasuring
-                 ? "Wird auf jeden Satz gestempelt, bis du sie änderst. "
-                   + "Beschreib, wie das Handy liegt und wie du dich bewegst."
-                 : "Wird auf jeden Satz gestempelt, bis du sie änderst. "
-                   + "Übung und Gewicht reichen, um den Satz später dem Training "
-                   + "zuzuordnen.")
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { session.refreshWatchLink() }
+    }
+
+    private var landscapeLayout: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(spacing: 8) {
+                modePicker
+                counterView(size: 62)
+                stats
+                if session.isMeasuring { seriesStrip }
+                Spacer(minLength: 0)
+                secondaryControlsStacked
+                startButton(titleSize: 26, padding: 18)
+            }
+            .frame(width: 208)
+
+            VStack(spacing: 0) {
+                VelocityPlot(values: session.velocity, peaks: session.peaks,
+                             manualMarks: session.manualMarkIndices,
+                             manualBottoms: session.manualBottomIndices)
+                    .frame(maxHeight: .infinity)
+                    .overlay(alignment: .topTrailing) { markBadge }
+                    .overlay(alignment: .bottom) {
+                        if session.isMeasuring { zoneHint }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { if session.isMeasuring { session.mark(.top) } }
+
+                if session.isMeasuring {
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(Color.orange.opacity(session.isRunning ? 0.20 : 0.07))
+                        .frame(height: 96)
+                        .overlay { zoneLabel("UNTEN", "arrow.down.to.line", .orange) }
+                        .contentShape(Rectangle())
+                        .onTapGesture { session.mark(.bottom) }
+                        .padding(.top, 6)
+                }
+            }
         }
     }
 
     // MARK: - Count
 
-    private var counter: some View {
+    private var counter: some View { counterView(size: 96) }
+
+    private func counterView(size: CGFloat) -> some View {
         VStack(spacing: 0) {
             if let seconds = session.countdown {
                 Text("\(seconds)")
-                    .font(.system(size: 96, weight: .bold, design: .rounded))
+                    .font(.system(size: size, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.orange)
                 Text("START IN").font(.caption2).tracking(2).foregroundStyle(.secondary)
             } else {
                 Text("\(session.count)")
-                    .font(.system(size: 96, weight: .bold, design: .rounded))
+                    .font(.system(size: size, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .minimumScaleFactor(0.5)
                     .lineLimit(1)
@@ -183,15 +242,28 @@ struct ContentView: View {
     // MARK: - Controls
 
     private var secondaryControls: some View {
-        HStack(spacing: 6) {
-            smallButton("Timer", session.startDelay == 0 ? "aus" : "\(session.startDelay)s") {
-                session.startDelay = nextDelay(after: session.startDelay)
-            }
-            smallButton("Verlauf", "\(session.store.records.count)") { showHistory = true }
-            smallButton("Reset", nil) { session.reset() }
-            smallButton("Mehr", nil) { showSettings = true }
+        HStack(spacing: 6) { timerButton; historyButton; resetButton; moreButton }
+    }
+
+    /// Two rows in the narrow landscape column: four across 200 points leaves 46 each,
+    /// which is not enough for a word and a number under it.
+    private var secondaryControlsStacked: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 6) { timerButton; historyButton }
+            HStack(spacing: 6) { resetButton; moreButton }
         }
     }
+
+    private var timerButton: some View {
+        smallButton("Timer", session.startDelay == 0 ? "aus" : "\(session.startDelay)s") {
+            session.startDelay = nextDelay(after: session.startDelay)
+        }
+    }
+    private var historyButton: some View {
+        smallButton("Verlauf", "\(session.store.records.count)") { showHistory = true }
+    }
+    private var resetButton: some View { smallButton("Reset", nil) { session.reset() } }
+    private var moreButton: some View { smallButton("Mehr", nil) { showSettings = true } }
 
     /// Training counts and nothing else. Measurement adds the tap zones and marks the
     /// set as reference data in the history. Both modes carry a label.
@@ -260,7 +332,9 @@ struct ContentView: View {
     }
 
     /// The one control that has to be hit while lying on a bench: full width, thumb-sized.
-    private var startButton: some View {
+    private var startButton: some View { startButton(titleSize: 30, padding: 26) }
+
+    private func startButton(titleSize: CGFloat, padding: CGFloat) -> some View {
         Button {
             if session.isRunning || session.countdown != nil {
                 session.stop()
@@ -269,9 +343,9 @@ struct ContentView: View {
             }
         } label: {
             Text(startTitle)
-                .font(.system(size: 30, weight: .bold, design: .rounded))
+                .font(.system(size: titleSize, weight: .bold, design: .rounded))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 26)
+                .padding(.vertical, padding)
                 .background(startColor)
                 .foregroundStyle(session.isRunning || session.countdown != nil
                                  ? Color.white : Color.black)
