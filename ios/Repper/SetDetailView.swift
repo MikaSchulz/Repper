@@ -156,6 +156,16 @@ struct SetDetailView: View {
                      with: .color(.red))
         }
 
+        // Faint bands where handles live, so it is visible that the middle is for
+        // panning and the edges are for grabbing.
+        if zoom > 1 {
+            for rect in [CGRect(x: 0, y: 0, width: size.width, height: size.height * 0.26),
+                         CGRect(x: 0, y: size.height * 0.74,
+                                width: size.width, height: size.height * 0.26)] {
+                ctx.fill(Path(rect), with: .color(.white.opacity(0.03)))
+            }
+        }
+
         drawMarks(&ctx, size, tops, isTop: true, lo: lo, hi: hi)
         drawMarks(&ctx, size, bottoms, isTop: false, lo: lo, hi: hi)
     }
@@ -246,15 +256,33 @@ struct SetDetailView: View {
             }
     }
 
+    /// A mark is grabbed by its handle, not by its whole column.
+    ///
+    /// Matching on horizontal distance alone made the middle of the plot ungrabbable
+    /// for panning: a set carries twenty or more marks, so almost every point is within
+    /// a finger's width of one of them, and every attempt to scroll along the axis
+    /// dragged a mark instead. Top handles live in the top band, bottom handles in the
+    /// bottom one, and the half in between belongs to the view.
     private func hitTest(_ point: CGPoint, _ size: CGSize) -> Mark? {
+        let lo = originT, hi = originT + visibleSpan
+        let topBand = size.height * 0.26
+        let bottomBand = size.height * 0.74
         var best: (Mark, CGFloat)?
-        for (i, t) in tops.enumerated() {
-            let d = abs(xFor(t, size.width) - point.x)
-            if d < hitRadius, best == nil || d < best!.1 { best = (Mark(isTop: true, index: i), d) }
+        if point.y <= topBand {
+            for (i, t) in tops.enumerated() where t >= lo && t <= hi {
+                let d = abs(xFor(t, size.width) - point.x)
+                if d < hitRadius, best == nil || d < best!.1 {
+                    best = (Mark(isTop: true, index: i), d)
+                }
+            }
         }
-        for (i, t) in bottoms.enumerated() {
-            let d = abs(xFor(t, size.width) - point.x)
-            if d < hitRadius, best == nil || d < best!.1 { best = (Mark(isTop: false, index: i), d) }
+        if point.y >= bottomBand {
+            for (i, t) in bottoms.enumerated() where t >= lo && t <= hi {
+                let d = abs(xFor(t, size.width) - point.x)
+                if d < hitRadius, best == nil || d < best!.1 {
+                    best = (Mark(isTop: false, index: i), d)
+                }
+            }
         }
         return best?.0
     }
@@ -410,10 +438,10 @@ struct SetDetailView: View {
             .background(Color.white.opacity(0.06))
             .clipShape(RoundedRectangle(cornerRadius: 10))
         } else {
-            Text("Ziehen verschiebt die Ansicht, Auf- und Zuziehen zoomt. Tippen setzt "
-                 + "eine Marke — oben in der oberen Hälfte, unten in der unteren. Eine "
-                 + "Marke ziehen verschiebt sie; dabei nach unten ausweichen macht sie "
-                 + "langsamer, bis auf ein Zwölftel.")
+            Text("In der Mitte ziehen verschiebt die Ansicht, Auf- und Zuziehen zoomt. "
+                 + "Eine Marke fasst du an ihrem Knopf oben oder unten an; dabei zur "
+                 + "Mitte ausweichen macht sie langsamer, bis auf ein Zwölftel. Tippen "
+                 + "setzt eine neue — oben in der oberen Hälfte, unten in der unteren.")
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
