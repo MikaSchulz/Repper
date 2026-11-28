@@ -18,7 +18,6 @@ final class RepSession: ObservableObject {
     @Published private(set) var sampleCount = 0
     @Published private(set) var duration = 0.0
     @Published private(set) var measuredRate = 0.0
-    @Published private(set) var phaseLabel = "—"
     @Published private(set) var phaseValue = 0                // -1 ecc, 0 pause, 1 con
     @Published private(set) var medianCon: Double?
     @Published private(set) var medianEcc: Double?
@@ -311,7 +310,6 @@ final class RepSession: ObservableObject {
         sampleCount = 0
         duration = 0
         measuredRate = 0
-        phaseLabel = "—"
         phaseValue = 0
         medianCon = nil
         medianEcc = nil
@@ -395,8 +393,8 @@ final class RepSession: ObservableObject {
             }
             if let v = r.vel.last {
                 let quiet = r.quiet || abs(v) < 0.02
+                // Still published for the watch, which has no curve to read it off.
                 phaseValue = quiet ? 0 : (v > 0 ? 1 : -1)
-                phaseLabel = quiet ? "pause" : (v > 0 ? "konzentrisch" : "exzentrisch")
             }
         }
         if let p = counter.medianPhases {

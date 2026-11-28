@@ -146,13 +146,15 @@ struct ContentView: View {
                     .foregroundStyle(.orange)
                 Text("START IN").font(.caption2).tracking(2).foregroundStyle(.secondary)
             } else {
+                // No live phase label under the count: whether this moment is the way
+                // up or the way down is something the lifter knows better than the
+                // phone does. What is worth knowing about the phases is how long each
+                // one took, and that is in the stats row as con / ecc.
                 Text("\(session.count)")
                     .font(.system(size: size, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .minimumScaleFactor(0.5)
                     .lineLimit(1)
-                Text(session.phaseLabel.uppercased())
-                    .font(.caption2).tracking(2).foregroundStyle(.secondary)
             }
         }
     }
@@ -414,9 +416,6 @@ struct VelocityPlot: View {
                             .frame(width: 2, height: 14)
                             .position(x: x(i), y: h - 8)
                     }
-                } else {
-                    Text("Geschwindigkeit (integriert)")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
