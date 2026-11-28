@@ -37,11 +37,22 @@ struct SetDetailView: View {
 
     /// What the current finger-down is doing. Decided once, on the first movement, so a
     /// drag cannot change its mind halfway and leave a mark somewhere unintended.
-    private enum Grab: Equatable { case none, pan(Double), move(Mark, Double) }
+    private enum Grab: Equatable {
+        case none
+        case pan(Double)
+        case move(Mark, Double)
+        /// Every mark at once, from where they all were when the drag began.
+        case shiftAll([Double], [Double])
+    }
     @State private var grab: Grab = .none
     @State private var dragStart: CGPoint?
     /// How much the current drag is slowed down, shown while it is.
     @State private var gain: Double = 1
+    /// Taps lag what they mark — the hand is busy and the finger lands late — so the
+    /// error is largely the same for every mark in a set. Correcting that one mark at a
+    /// time is the wrong unit of work.
+    @State private var shiftMode = false
+    @State private var shiftBy: Double = 0
 
     /// Snapshots of both mark lists. Correcting a set is fiddly work and a wrong drag
     /// is easy; without a way back the only repair is to remember where the mark was.
@@ -69,7 +80,7 @@ struct SetDetailView: View {
                 } else {
                     plot
                         .frame(maxHeight: landscape ? .infinity : 340)
-                    if !landscape { legend }
+                    legend
                     editor
                     if !landscape { counts }
                 }
@@ -213,6 +224,10 @@ struct SetDetailView: View {
                         beginEdit()
                         grab = .move(m, t)
                         selected = m
+                    } else if shiftMode, !(tops.isEmpty && bottoms.isEmpty) {
+                        beginEdit()
+                        grab = .shiftAll(tops, bottoms)
+                        selected = nil
                     } else {
                         grab = .pan(originT)
                     }
@@ -227,6 +242,20 @@ struct SetDetailView: View {
                     gain = dy < 48 ? 1 : (dy < 120 ? 0.25 : 0.08)
                     let perPoint = visibleSpan / Double(size.width)
                     setTime(m, startTime + Double(value.translation.width) * perPoint * gain)
+                case .shiftAll(let startTops, let startBottoms):
+                    let dy = abs(value.location.y - value.startLocation.y)
+                    gain = dy < 48 ? 1 : (dy < 120 ? 0.25 : 0.08)
+                    let perPoint = visibleSpan / Double(size.width)
+                    // One offset for all of them, clamped so that the outermost mark
+                    // stays inside the recording. Clamping each mark on its own would
+                    // squash the ends together and destroy the spacing being preserved.
+                    let all = startTops + startBottoms
+                    guard let lowest = all.min(), let highest = all.max() else { return }
+                    let raw = Double(value.translation.width) * perPoint * gain
+                    shiftBy = min(max(raw, tFirst - lowest), tFirst + tSpan - highest)
+                    tops = startTops.map { $0 + shiftBy }
+                    bottoms = startBottoms.map { $0 + shiftBy }
+
                 case .pan(let start):
                     let perPoint = visibleSpan / Double(size.width)
                     originT = clampOrigin(start - Double(value.translation.width) * perPoint)
@@ -238,6 +267,9 @@ struct SetDetailView: View {
                 let moved = hypot(value.translation.width, value.translation.height)
                 gain = 1
                 switch grab {
+                case .shiftAll:
+                    persist()
+                    shiftBy = 0
                 case .move:
                     persist()
                 case .pan:
@@ -395,18 +427,32 @@ struct SetDetailView: View {
     // MARK: - Chrome
 
     private var legend: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             dot(.red, "gezählt")
             dot(.blue, "oben")
             dot(.orange, "unten")
             Spacer()
-            if gain < 1 {
+            if case .shiftAll = grab {
+                Text(String(format: "%+.2f s", shiftBy))
+                    .foregroundStyle(.yellow).monospacedDigit()
+            } else if gain < 1 {
                 Text(String(format: "fein ×%.2f", gain))
                     .foregroundStyle(.yellow).monospacedDigit()
             } else if zoom > 1 {
                 Text(String(format: "%.0f s sichtbar", visibleSpan))
                     .foregroundStyle(.secondary).monospacedDigit()
             }
+            Button { shiftMode.toggle() } label: {
+                Label("alle", systemImage: "arrow.left.and.right")
+                    .font(.caption2)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(shiftMode ? Color.yellow.opacity(0.25)
+                                          : Color.white.opacity(0.10))
+                    .foregroundStyle(shiftMode ? Color.yellow : Color.secondary)
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(tops.isEmpty && bottoms.isEmpty)
         }
         .font(.caption2)
     }
@@ -438,7 +484,11 @@ struct SetDetailView: View {
             .background(Color.white.opacity(0.06))
             .clipShape(RoundedRectangle(cornerRadius: 10))
         } else {
-            Text("In der Mitte ziehen verschiebt die Ansicht, Auf- und Zuziehen zoomt. "
+            Text(shiftMode
+                 ? "Alle verschieben ist an: Ziehen in der Mitte schiebt sämtliche Marken "
+                   + "gemeinsam über die Zeitachse, zur Mitte ausweichen macht es feiner. "
+                   + "Einzelne Marken lassen sich weiterhin an ihrem Knopf anfassen."
+                 : "In der Mitte ziehen verschiebt die Ansicht, Auf- und Zuziehen zoomt. "
                  + "Eine Marke fasst du an ihrem Knopf oben oder unten an; dabei zur "
                  + "Mitte ausweichen macht sie langsamer, bis auf ein Zwölftel. Tippen "
                  + "setzt eine neue — oben in der oberen Hälfte, unten in der unteren.")
