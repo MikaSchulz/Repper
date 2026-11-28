@@ -22,6 +22,14 @@ struct SetDetailView: View {
     @State private var selected: Mark?
     @State private var loading = true
 
+    /// Fixed for the recording, so it is computed once rather than per drawn point.
+    /// It used to be `vel.map(abs).max()` inside the y mapping, which allocated an
+    /// array over every sample for each of the few hundred points in a frame -- the
+    /// whole cost of a pinch was in that one line.
+    @State private var vScale: Double = 1
+    @State private var tFirst: Double = 0
+    @State private var tSpan: Double = 1
+
     /// Visible span as a fraction of the whole recording, and where that span starts.
     @State private var zoom: Double = 1
     @State private var originT: Double = 0
@@ -66,7 +74,7 @@ struct SetDetailView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    withAnimation(.easeOut(duration: 0.15)) { zoom = 1; originT = 0 }
+                    withAnimation(.easeOut(duration: 0.15)) { zoom = 1; originT = tFirst }
                 } label: {
                     Label("Ganzer Satz", systemImage: "arrow.left.and.right")
                 }
@@ -75,7 +83,16 @@ struct SetDetailView: View {
         }
         .task {
             let samples = store.samples(for: record)
-            analysis = RepCounter.analyse(samples)
+            let a = RepCounter.analyse(samples)
+            analysis = a
+            if let a, let f = a.t.first, let l = a.t.last, l > f {
+                tFirst = f
+                tSpan = l - f
+                originT = f
+                var peak = 1e-6
+                for v in a.vel { peak = Swift.max(peak, abs(v)) }
+                vScale = peak
+            }
             tops = record.manualMarks
             bottoms = record.manualBottoms
             loading = false
@@ -100,9 +117,8 @@ struct SetDetailView: View {
 
     /// One pass: zero line, curve, counted repetitions, both kinds of mark.
     private func draw(_ ctx: GraphicsContext, _ size: CGSize) {
-        guard let a = analysis, a.vel.count > 1, let span = span else { return }
-        let visible = span.last - span.first
-        let lo = originT, hi = originT + visible * (1 / zoom)
+        guard let a = analysis, a.vel.count > 1 else { return }
+        let lo = originT, hi = originT + visibleSpan
 
         var ctx = ctx
         let zeroY = yFor(0, size.height)
@@ -159,13 +175,11 @@ struct SetDetailView: View {
     private var magnify: some Gesture {
         MagnifyGesture()
             .onChanged { value in
-                guard let span else { return }
-                let whole = span.last - span.first
-                let centre = originT + (whole / zoom) / 2
+                let centre = originT + visibleSpan / 2
                 zoom = min(60, max(1, zoomBase * value.magnification))
-                originT = clampOrigin(centre - (whole / zoom) / 2)
+                originT = clampOrigin(centre - visibleSpan / 2)
             }
-            .onEnded { _ in zoomBase = zoom }
+            .onEnded { _ in zoomBase = zoom }   // the next pinch starts from where this left off
     }
 
     /// A single gesture decides, on the first movement, whether this is a mark being
@@ -184,8 +198,7 @@ struct SetDetailView: View {
                 case .move(let m):
                     setTime(m, timeFor(value.location.x, size.width))
                 case .pan(let start):
-                    guard let span else { return }
-                    let perPoint = (span.last - span.first) / zoom / Double(size.width)
+                    let perPoint = visibleSpan / Double(size.width)
                     originT = clampOrigin(start - Double(value.translation.width) * perPoint)
                 case .none:
                     break
@@ -224,19 +237,10 @@ struct SetDetailView: View {
 
     // MARK: - Geometry
 
-    private var span: (first: Double, last: Double)? {
-        guard let a = analysis, let f = a.t.first, let l = a.t.last, l > f else { return nil }
-        return (f, l)
-    }
-
-    private var visibleSpan: Double {
-        guard let span else { return 1 }
-        return (span.last - span.first) / zoom
-    }
+    private var visibleSpan: Double { tSpan / zoom }
 
     private func clampOrigin(_ t: Double) -> Double {
-        guard let span else { return 0 }
-        return min(max(span.first, t), span.last - visibleSpan)
+        min(max(tFirst, t), tFirst + tSpan - visibleSpan)
     }
 
     private func xFor(_ t: Double, _ width: CGFloat) -> CGFloat {
@@ -244,19 +248,16 @@ struct SetDetailView: View {
     }
 
     private func timeFor(_ x: CGFloat, _ width: CGFloat) -> Double {
-        guard let span, width > 0 else { return 0 }
-        return min(span.last, max(span.first, originT + Double(x / width) * visibleSpan))
+        guard width > 0 else { return 0 }
+        return min(tFirst + tSpan, max(tFirst, originT + Double(x / width) * visibleSpan))
     }
 
     private func yFor(_ v: Double, _ height: CGFloat) -> CGFloat {
-        guard let a = analysis else { return height / 2 }
-        let scale = max(a.vel.map(abs).max() ?? 1, 1e-6)
-        return height / 2 - CGFloat(v / scale) * (height / 2 - 16)
+        height / 2 - CGFloat(v / vScale) * (height / 2 - 16)
     }
 
     private func index(of t: Double, _ a: Analysis) -> Int {
-        guard let f = a.t.first else { return 0 }
-        return min(a.vel.count - 1, max(0, Int((t - f) * RepConfig.default.fs)))
+        min(a.vel.count - 1, max(0, Int((t - tFirst) * RepConfig.default.fs)))
     }
 
     private func valueAt(_ t: Double, _ a: Analysis) -> Double { a.vel[index(of: t, a)] }
@@ -264,8 +265,7 @@ struct SetDetailView: View {
     // MARK: - Editing
 
     private func setTime(_ mark: Mark, _ value: Double) {
-        guard let span else { return }
-        let t = min(span.last, max(span.first, value))
+        let t = min(tFirst + tSpan, max(tFirst, value))
         if mark.isTop {
             guard tops.indices.contains(mark.index) else { return }
             tops[mark.index] = t
