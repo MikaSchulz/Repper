@@ -86,7 +86,9 @@ struct ContentView: View {
                 modePicker
                 counterView(size: 62)
                 stats
-                if session.isMeasuring { seriesStrip }
+                // Both modes carry a label -- the exercise in training, the series in
+                // measurement -- and landscape was still hiding it in training.
+                seriesStrip
                 Spacer(minLength: 0)
                 secondaryControlsStacked
                 startButton(titleSize: 26, padding: 18)
