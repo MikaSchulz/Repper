@@ -61,30 +61,9 @@ struct ContentView: View {
             // bracket a repetition, which is what makes the count checkable at all.
             // Training mode drops both -- with the phone on the stack they cannot be
             // reached anyway, and the plot gets the room.
-            VStack(spacing: 0) {
-                VStack(spacing: 10) {
-                    counter
-                    VelocityPlot(values: session.velocity, peaks: session.peaks,
-                                 manualMarks: session.manualMarkIndices,
-                                 manualBottoms: session.manualBottomIndices)
-                        .frame(maxHeight: .infinity)
-                        .overlay(alignment: .topTrailing) { markBadge }
-                        .overlay(alignment: .bottom) {
-                            if session.isMeasuring { zoneHint }
-                        }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { if session.isMeasuring { session.mark(.top) } }
-
-                if session.isMeasuring {
-                    RoundedRectangle(cornerRadius: 14)
-                        .fill(Color.orange.opacity(session.isRunning ? 0.20 : 0.07))
-                        .frame(height: 190)
-                        .overlay { zoneLabel("UNTEN", "arrow.down.to.line", .orange) }
-                        .contentShape(Rectangle())
-                        .onTapGesture { session.mark(.bottom) }
-                        .padding(.top, 6)
-                }
+            VStack(spacing: 10) {
+                counter
+                plotWithZones
             }
 
             if let message = session.message {
@@ -114,29 +93,44 @@ struct ContentView: View {
             }
             .frame(width: 208)
 
-            VStack(spacing: 0) {
-                VelocityPlot(values: session.velocity, peaks: session.peaks,
-                             manualMarks: session.manualMarkIndices,
-                             manualBottoms: session.manualBottomIndices)
-                    .frame(maxHeight: .infinity)
-                    .overlay(alignment: .topTrailing) { markBadge }
-                    .overlay(alignment: .bottom) {
-                        if session.isMeasuring { zoneHint }
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture { if session.isMeasuring { session.mark(.top) } }
+            plotWithZones
+        }
+    }
 
+    /// The curve across the whole area, with the two tap zones as its halves.
+    ///
+    /// They used to be stacked: the curve lived in the upper view and the lower one was
+    /// an empty orange strip. Half the height showed nothing, and the half that did was
+    /// the half a repetition only spends going up.
+    private var plotWithZones: some View {
+        VelocityPlot(values: session.velocity, peaks: session.peaks,
+                     manualMarks: session.manualMarkIndices,
+                     manualBottoms: session.manualBottomIndices)
+            .frame(maxHeight: .infinity)
+            .overlay(alignment: .topTrailing) { markBadge }
+            .overlay {
                 if session.isMeasuring {
-                    RoundedRectangle(cornerRadius: 14)
-                        .fill(Color.orange.opacity(session.isRunning ? 0.20 : 0.07))
-                        .frame(height: 96)
-                        .overlay { zoneLabel("UNTEN", "arrow.down.to.line", .orange) }
-                        .contentShape(Rectangle())
-                        .onTapGesture { session.mark(.bottom) }
-                        .padding(.top, 6)
+                    VStack(spacing: 0) {
+                        tapZone("OBEN", "arrow.up.to.line", .blue, .bottom) {
+                            session.mark(.top)
+                        }
+                        tapZone("UNTEN", "arrow.down.to.line", .orange, .top) {
+                            session.mark(.bottom)
+                        }
+                    }
                 }
             }
-        }
+    }
+
+    private func tapZone(_ title: String, _ symbol: String, _ tint: Color,
+                         _ edge: Alignment, _ action: @escaping () -> Void) -> some View {
+        Rectangle()
+            .fill(tint.opacity(session.isRunning ? 0.10 : 0.04))
+            .overlay(alignment: edge) {
+                zoneLabel(title, symbol, tint).padding(.vertical, 6)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: action)
     }
 
     // MARK: - Count
@@ -377,11 +371,13 @@ struct VelocityPlot: View {
         GeometryReader { geo in
             let w = geo.size.width
             let h = geo.size.height
-            let lo = (values.min() ?? -1)
-            let hi = (values.max() ?? 1)
-            let span = max(hi - lo, 0.0001)
+            // Scaled symmetrically about zero, so the middle of the plot is standing
+            // still and the two halves mean up and down -- which is what the two tap
+            // zones over it mean. Scaling to min...max instead let the zero line sit
+            // wherever the data put it, and move as the set went on.
+            let peak = max(values.map(abs).max() ?? 1, 0.0001)
             let x = { (i: Int) in Double(i) / Double(max(values.count - 1, 1)) * w }
-            let y = { (v: Double) in h - (v - lo) / span * h }
+            let y = { (v: Double) in h / 2 - v / peak * (h / 2 - 6) }
 
             ZStack {
                 RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.04))
